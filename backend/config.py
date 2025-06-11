@@ -218,12 +218,30 @@ class ConfigManager:
             "n_threads",
             "main_gpu",
             "n_gpu_layers",
-            "type_k",
-            "type_v",
+            "rope-scale",
+            "yarn-orig-ctx",
         ]
         for field in int_fields:
             if field in model and not isinstance(model[field], int):
                 raise ValueError(f"Model {index}: {field} must be an integer")
+
+        str_fields = [
+            "mmproj",
+            "chat_template",
+            "split_mode",
+            "pooling",
+            "rope-scaling",
+            "cache-type-k",
+            "cache-type-v",
+        ]
+        for field in str_fields:
+            if field in model and not isinstance(model[field], str):
+                raise ValueError(f"Model {index}: {field} must be a string")
+
+        num_fields = ["rope-scale"]
+        for field in num_fields:
+            if field in model and not isinstance(model[field], (int, float)):
+                raise ValueError(f"Model {index}: {field} must be a number")
 
         bool_fields = [
             "offload_kqv",
@@ -236,9 +254,6 @@ class ConfigManager:
         for field in bool_fields:
             if field in model and not isinstance(model[field], bool):
                 raise ValueError(f"Model {index}: {field} must be a boolean")
-
-        if "chat_format" in model and not isinstance(model["chat_format"], str):
-            raise ValueError(f"Model {index}: chat_format must be a string")
 
         if "tensor_split" in model:
             if not isinstance(model["tensor_split"], list):

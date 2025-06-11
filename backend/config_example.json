@@ -22,7 +22,7 @@
         "path": "/path/to/llama-server",
         "host": "127.0.0.1",
         "port": 8086,
-        "extra_args": ["--verbose"]
+        "extra_args": []
     },
     "models": [
         {
@@ -47,7 +47,7 @@
             "n_ctx": 8192,
             "n_batch": 256,
             "n_threads": 8,
-            "chat-template": "vicuna",
+            "chat_template": "mistral-instruct",
             "offload_kqv": false,
             "flash_attn": false,
             "use_mlock": true,
@@ -55,7 +55,7 @@
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 50,
             "jinja": true,
-            "split_mode": 2,
+            "split_mode": "row",
             "cache-type-k": "q8_0",
             "cache-type-v": "q8_0"
         },
@@ -67,15 +67,44 @@
             "n_ctx": 32768,
             "n_batch": 256,
             "n_threads": 8,
-            "chat-template": "gemma",
+            "chat_template": "gemma",
             "offload_kqv": true,
             "flash_attn": true,
             "use_mlock": true,
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 99,
-            "rope_scaling_type": 1,
-            "rope_freq_scale": 0.5,
-            "yarn_orig_ctx": 32768
+            "rope-scaling": "linear",
+            "rope-scale": 2,
+            "yarn-orig-ctx": 32768
+        },
+        {
+            "runner": "runner2",
+            "model": "/path/to/reranker_model.gguf",
+            "model_alias": "reranker_model",
+            "n_ctx": 8192,
+            "n_batch": 512,
+            "n_threads": 8,
+            "offload_kqv": true,
+            "flash_attn": true,
+            "use_mlock": true,
+            "reranking": true,
+            "tensor_split": [1.0, 0.0],
+            "n_gpu_layers": 99
+        },
+        {
+            "runner": "runner1",
+            "model": "/path/to/embedding_model.gguf",
+            "model_alias": "embedding_model",
+            "n_ctx": 8192,
+            "n_batch": 512,
+            "n_threads": 8,
+            "offload_kqv": true,
+            "flash_attn": true,
+            "use_mlock": true,
+            "embedding": true,
+            "pooling": "cls",
+            "tensor_split": [1.0, 0.0],
+            "n_gpu_layers": 99
         }
     ]
 }

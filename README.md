@@ -137,14 +137,42 @@ Edit `config.json` to configure your runners and models:
 - `extra_args`: Additional arguments for llama-server
 
 **Model Options:**
+
+*Core Settings:*
+- `runner`: Which runner to use for this model
 - `model`: Path to .gguf model file
 - `model_alias`: Name to use in API calls
+
+*Model Types:*
 - `embedding`: Set to `true` for embedding models
 - `reranking`: Set to `true` for reranking models
-- `main_gpu`: Which GPU to use (0, 1, 2...)
-- `n_gpu_layers`: How many layers to offload to GPU
-- `n_ctx`: Context window size
 - `mmproj`: Path to multimodal projection file (for vision models)
+
+*Performance & Memory:*
+- `n_ctx`: Context window size (e.g., 4096, 8192, 32768)
+- `n_batch`: Batch size for processing (e.g., 256, 512)
+- `n_threads`: Number of CPU threads to use
+- `main_gpu`: Which GPU to use (0, 1, 2...)
+- `n_gpu_layers`: How many layers to offload to GPU (99 for all layers)
+- `tensor_split`: Array defining how to split model across GPUs (e.g., [1.0, 0.0])
+- `offload_kqv`: Whether to offload key-value cache to GPU (`true`/`false`)
+- `use_mlock`: Lock model in RAM to prevent swapping (`true`/`false`)
+
+*Optimization:*
+- `flash_attn`: Enable flash attention for faster processing (`true`/`false`)
+- `split_mode`: How to split model layers ("row" or other modes)
+- `cache-type-k`: Key cache quantization type (e.g., "q8_0")
+- `cache-type-v`: Value cache quantization type (e.g., "q8_0")
+
+*Chat & Templates:*
+- `chat_template`: Chat template format (e.g., "mistral-instruct", "gemma")
+- `jinja`: Enable Jinja templating (`true`/`false`)
+
+*Advanced Options:*
+- `rope-scaling`: RoPE scaling method (e.g., "linear")
+- `rope-scale`: RoPE scaling factor (e.g., 2)
+- `yarn-orig-ctx`: Original context size for YaRN scaling
+- `pooling`: Pooling method for embeddings (e.g., "cls")
 
 ## Testing
 
