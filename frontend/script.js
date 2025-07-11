@@ -1,6 +1,6 @@
 // Configuration
 const CONFIG = {
-    API_BASE_URL: '/health',
+    API_BASE_URL: window.FLEXLLAMA_CONFIG.HEALTH_ENDPOINT || '/health',
     REFRESH_INTERVAL: 2000,
     REQUEST_TIMEOUT: 5000,
 };
@@ -15,9 +15,15 @@ const STATUS_MAP = {
     'loading': { label: 'Loading', icon: '⟳', color: 'loading' },
     'error': { label: 'Error', icon: '✗', color: 'error' },
     'not_running': { label: 'Not Running', icon: '⏸', color: 'error' },
-    'not_loaded': { label: 'Not Loaded', icon: '○', color: 'error' },
-    'unloaded': { label: 'Unloaded', icon: '○', color: 'unloaded' }
+    'not_loaded': { label: 'Not Loaded', icon: '○', color: 'error' }
 };
+
+// Sanitize HTML to prevent XSS
+function sanitizeHTML(text) {
+    const element = document.createElement('div');
+    element.innerText = text;
+    return element.innerHTML;
+}
 
 // Initialize the dashboard
 document.addEventListener('DOMContentLoaded', function() {
@@ -191,9 +197,9 @@ function createModelItem(model) {
                 </div>
             </div>
             <div class="model-info">
-                <div class="model-name" title="${alias}">${alias}</div>
+                <div class="model-name" title="${sanitizeHTML(alias)}">${sanitizeHTML(alias)}</div>
                 <div class="model-status status-${statusInfo.color}">${statusInfo.label}</div>
-                <div class="model-message">${health.message || 'No message'}</div>
+                <div class="model-message">${sanitizeHTML(health.message || 'No message')}</div>
                 <div class="model-details">
                     ${isLoaded ? 'Currently loaded' : 'Available but not loaded'}
                 </div>

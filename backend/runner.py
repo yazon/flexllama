@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 import socket
 import aiohttp
 import json
+import psutil
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
@@ -69,6 +70,63 @@ class RunnerProcess:
         self.current_model = None  # Track which model is currently loaded
         self.is_starting = False
         self.start_time = None
+
+    def _kill_process_tree(self, pid: int):
+        """Terminate a process and all of its children, using an OS-specific method."""
+        if os.name == "nt":
+            try:
+                # On Windows, taskkill is more reliable for killing process trees.
+                result = subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode != 0 and result.returncode != 128:
+                    logger.warning(
+                        f"taskkill for PID {pid} returned exit code {result.returncode}."
+                        f"\n  stdout: {result.stdout.strip()}"
+                        f"\n  stderr: {result.stderr.strip()}"
+                    )
+            except FileNotFoundError:
+                logger.warning("`taskkill` command not found. Falling back to psutil.")
+                self._kill_with_psutil(pid)
+        else:
+            self._kill_with_psutil(pid)
+
+    def _kill_with_psutil(self, pid: int):
+        """Terminate a process and all of its children using psutil."""
+        try:
+            parent = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return
+
+        children = parent.children(recursive=True)
+        for child in children:
+            try:
+                child.terminate()
+            except psutil.NoSuchProcess:
+                continue
+
+        _, alive = psutil.wait_procs(children, timeout=3)
+        for child in alive:
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+
+        try:
+            parent.terminate()
+        except psutil.NoSuchProcess:
+            return
+
+        try:
+            parent.wait(timeout=3)
+        except psutil.TimeoutExpired:
+            try:
+                parent.kill()
+            except psutil.NoSuchProcess:
+                pass
 
     def add_model(self, model_config):
         """Add a model to this runner.
@@ -220,13 +278,18 @@ class RunnerProcess:
 
             # Start process
             try:
-                self.process = subprocess.Popen(
-                    cmd,
-                    stdout=self.output_file,
-                    stderr=self.output_file,
-                    text=True,
-                    bufsize=1,
-                )
+                popen_kwargs = {
+                    "stdout": self.output_file,
+                    "stderr": self.output_file,
+                    "text": True,
+                    "bufsize": 1,
+                }
+                if os.name == "posix":
+                    popen_kwargs["start_new_session"] = True
+                elif os.name == "nt":
+                    popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+                self.process = subprocess.Popen(cmd, **popen_kwargs)
             except Exception as e:
                 logger.error(
                     f"Failed to create subprocess for runner {self.runner_name}: {e}"
@@ -314,33 +377,15 @@ class RunnerProcess:
                 f"Stopping runner {self.runner_name} (current model: {current_alias})"
             )
 
-            # Try graceful termination first
-            self.process.terminate()
+            pid = self.process.pid
+            loop = asyncio.get_event_loop()
 
-            # Wait for process to terminate
-            try:
-                # Use asyncio to wait without blocking
-                for _ in range(50):  # 5 seconds with 0.1s intervals
-                    if self.process is not None and self.process.poll() is not None:
-                        break
-                    await asyncio.sleep(0.1)
+            # Run synchronous process killing in a thread to avoid blocking
+            await loop.run_in_executor(None, self._kill_process_tree, pid)
 
-                # If still running, force kill
-                if self.process is not None and self.process.poll() is None:
-                    logger.warning(
-                        f"Runner {self.runner_name} did not terminate gracefully, forcing kill"
-                    )
-                    self.process.kill()
-
-                    # Wait again
-                    for _ in range(50):  # 5 seconds with 0.1s intervals
-                        if self.process is not None and self.process.poll() is not None:
-                            break
-                        await asyncio.sleep(0.1)
-            except Exception as e:
-                logger.error(
-                    f"Error waiting for runner {self.runner_name} to stop: {e}"
-                )
+            # Poll to update the return code
+            if self.process:
+                self.process.poll()
 
             # Get exit code before nullifying process
             exit_code = (
@@ -622,6 +667,7 @@ class RunnerManager:
         self.session_log_dir = session_log_dir or "logs"
         self.runners = {}  # Map of runner name to RunnerProcess
         self.model_runner_map = {}  # Map of model alias to runner name
+        self.timeout = 300  # 5 minutes
         self._initialize_runners()
 
     def _initialize_runners(self):
@@ -945,61 +991,56 @@ class RunnerManager:
 
         last_error = None
 
-        for attempt in range(max_retries + 1):
-            try:
-                if attempt > 0:
-                    delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-                    logger.info(
-                        f"Retrying model readiness check for {model_alias} (attempt {attempt + 1}/{max_retries + 1}) after {delay}s delay"
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.debug(f"Checking model readiness for {model_alias}")
+        # Initial check before starting retry loop
+        is_ready, last_error = await self._perform_readiness_check(model_alias)
+        if is_ready:
+            return True, None
 
-                # Ensure model is started
-                if not await self.is_model_available(model_alias):
-                    logger.info(f"Starting runner for model {model_alias}")
-                    if not await self.start_runner_for_model(model_alias):
-                        last_error = f"Failed to start model: {model_alias}"
-                        if attempt == max_retries:
-                            break
-                        continue
+        for attempt in range(max_retries):
+            delay = min(base_delay * (2**attempt), max_delay)
+            logger.info(
+                f"Retrying model readiness check for {model_alias} (attempt {attempt + 2}/{max_retries + 1}) after {delay}s delay"
+            )
+            await asyncio.sleep(delay)
 
-                # Wait for the newly started model to become ready
-                logger.debug(
-                    f"Waiting for newly started model {model_alias} to become ready"
-                )
-                await self._wait_for_model_readiness(model_alias, max_wait_seconds=30)
-
-                # Do a pre-flight readiness check
-                is_ready, readiness_error = await self._check_model_readiness(
-                    model_alias
-                )
-                if not is_ready:
-                    last_error = f"Model not ready: {readiness_error}"
-                    logger.info(f"Model {model_alias} not ready: {readiness_error}")
-                    if attempt < max_retries:
-                        continue
-                    else:
-                        break
-
-                # Model is ready
-                logger.debug(f"Model {model_alias} is ready")
+            is_ready, last_error = await self._perform_readiness_check(model_alias)
+            if is_ready:
                 return True, None
-
-            except Exception as e:
-                last_error = f"Readiness check error: {str(e)}"
-                logger.error(
-                    f"Error checking model readiness for {model_alias} (attempt {attempt + 1}): {e}"
-                )
-                if attempt == max_retries:
-                    break
 
         # All retries exhausted
         logger.error(
             f"Model readiness check for {model_alias} failed after {max_retries + 1} attempts. Last error: {last_error}"
         )
         return False, last_error
+
+    async def _perform_readiness_check(self, model_alias):
+        """Helper to perform a single readiness check, including starting the model if needed."""
+        try:
+            # Ensure model is started
+            if not await self.is_model_available(model_alias):
+                logger.info(f"Starting runner for model {model_alias}")
+                if not await self.start_runner_for_model(model_alias):
+                    return False, f"Failed to start model: {model_alias}"
+
+            # Wait for the newly started model to become ready
+            logger.debug(
+                f"Waiting for newly started model {model_alias} to become ready"
+            )
+            await self._wait_for_model_readiness(model_alias, max_wait_seconds=30)
+
+            # Do a pre-flight readiness check
+            is_ready, readiness_error = await self._check_model_readiness(model_alias)
+            if not is_ready:
+                logger.info(f"Model {model_alias} not ready: {readiness_error}")
+                return False, f"Model not ready: {readiness_error}"
+
+            # Model is ready
+            logger.debug(f"Model {model_alias} is ready")
+            return True, None
+
+        except Exception as e:
+            logger.error(f"Error checking model readiness for {model_alias}: {e}")
+            return False, f"Readiness check error: {str(e)}"
 
     async def _check_model_readiness(self, model_alias):
         """Check if a model is ready to handle requests by making a simple health check.
@@ -1084,14 +1125,13 @@ class RunnerManager:
             f"Model {model_alias} did not become ready within {max_wait_seconds}s"
         )
 
-    async def forward_request(self, model_alias, endpoint, request_data, timeout=120):
+    async def forward_request(self, model_alias, endpoint, request_data):
         """Forward a request to a model's runner (assumes model is already ready).
 
         Args:
             model_alias: Alias of the model to forward to.
             endpoint: API endpoint to forward to (e.g., "/v1/chat/completions").
             request_data: The request data to forward.
-            timeout: Request timeout in seconds.
 
         Returns:
             Tuple of (success: bool, response_data: dict, status_code: int)
@@ -1111,7 +1151,9 @@ class RunnerManager:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    url, json=request_data, timeout=aiohttp.ClientTimeout(total=timeout)
+                    url,
+                    json=request_data,
+                    timeout=aiohttp.ClientTimeout(total=self.timeout),
                 ) as response:
                     try:
                         response_data = await response.json()
