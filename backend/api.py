@@ -34,6 +34,7 @@ class APIServer:
         # Get host and port for API server from API-specific configuration
         self.host = config_manager.get_api_host()
         self.port = config_manager.get_api_port()
+        self.health_endpoint = config_manager.get_health_endpoint()
 
         # Set a larger client_max_size to handle image uploads (10MB should be enough)
         self.app = web.Application(client_max_size=10 * 1024 * 1024)
@@ -46,7 +47,7 @@ class APIServer:
         self.app.add_routes(
             [
                 web.get("/v1/models", self.handle_models),
-                web.get("/health", self.handle_health),
+                web.get(self.health_endpoint, self.handle_health),
                 web.post("/v1/chat/completions", self.handle_chat_completions),
                 web.post("/v1/completions", self.handle_completions),
                 web.post("/v1/embeddings", self.handle_embeddings),
@@ -136,6 +137,10 @@ class APIServer:
             if os.path.exists(dashboard_path):
                 with open(dashboard_path, "r", encoding="utf-8") as f:
                     content = f.read()
+                # Inject the health endpoint into the dashboard
+                content = content.replace(
+                    "__HEALTH_ENDPOINT__", self.health_endpoint
+                )
                 return web.Response(text=content, content_type="text/html")
             else:
                 return web.Response(

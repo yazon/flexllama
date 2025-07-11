@@ -123,6 +123,8 @@ class ConfigManager:
                 raise ValueError("API configuration missing required field: port")
             if not isinstance(api_config["port"], int):
                 raise ValueError("API port must be an integer")
+            if "health_endpoint" in api_config and not isinstance(api_config["health_endpoint"], str):
+                raise ValueError("API health_endpoint must be a string")
         else:
             raise ValueError("API configuration missing required field: api")
 
@@ -463,15 +465,23 @@ class ConfigManager:
             raise ValueError("API configuration missing required field: api")
 
     def get_api_port(self):
-        """Get the API server port.
+        """Get the port for the API server.
 
         Returns:
-            The API server port.
+            The port for the API server.
         """
         if "api" in self.config:
-            return self.config["api"]["port"]
+            return self.config.get("api", {}).get("port")
         else:
             raise ValueError("API configuration missing required field: api")
+
+    def get_health_endpoint(self):
+        """Get the health endpoint for the API server.
+
+        Returns:
+            The health endpoint for the API server.
+        """
+        return self.config.get("api", {}).get("health_endpoint", "/health")
 
     def get_runner_host(self, runner_name: str):
         """Get the host for a specific runner.

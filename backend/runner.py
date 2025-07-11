@@ -72,7 +72,30 @@ class RunnerProcess:
         self.start_time = None
 
     def _kill_process_tree(self, pid: int):
-        """Terminate a process and all of its children."""
+        """Terminate a process and all of its children, using an OS-specific method."""
+        if os.name == "nt":
+            try:
+                # On Windows, taskkill is more reliable for killing process trees.
+                result = subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode != 0 and result.returncode != 128:
+                    logger.warning(
+                        f"taskkill for PID {pid} returned exit code {result.returncode}."
+                        f"\n  stdout: {result.stdout.strip()}"
+                        f"\n  stderr: {result.stderr.strip()}"
+                    )
+            except FileNotFoundError:
+                logger.warning("`taskkill` command not found. Falling back to psutil.")
+                self._kill_with_psutil(pid)
+        else:
+            self._kill_with_psutil(pid)
+
+    def _kill_with_psutil(self, pid: int):
+        """Terminate a process and all of its children using psutil."""
         try:
             parent = psutil.Process(pid)
         except psutil.NoSuchProcess:
@@ -968,61 +991,56 @@ class RunnerManager:
 
         last_error = None
 
-        for attempt in range(max_retries + 1):
-            try:
-                if attempt > 0:
-                    delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
-                    logger.info(
-                        f"Retrying model readiness check for {model_alias} (attempt {attempt + 1}/{max_retries + 1}) after {delay}s delay"
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.debug(f"Checking model readiness for {model_alias}")
+        # Initial check before starting retry loop
+        is_ready, last_error = await self._perform_readiness_check(model_alias)
+        if is_ready:
+            return True, None
 
-                # Ensure model is started
-                if not await self.is_model_available(model_alias):
-                    logger.info(f"Starting runner for model {model_alias}")
-                    if not await self.start_runner_for_model(model_alias):
-                        last_error = f"Failed to start model: {model_alias}"
-                        if attempt == max_retries:
-                            break
-                        continue
+        for attempt in range(max_retries):
+            delay = min(base_delay * (2**attempt), max_delay)
+            logger.info(
+                f"Retrying model readiness check for {model_alias} (attempt {attempt + 2}/{max_retries + 1}) after {delay}s delay"
+            )
+            await asyncio.sleep(delay)
 
-                # Wait for the newly started model to become ready
-                logger.debug(
-                    f"Waiting for newly started model {model_alias} to become ready"
-                )
-                await self._wait_for_model_readiness(model_alias, max_wait_seconds=30)
-
-                # Do a pre-flight readiness check
-                is_ready, readiness_error = await self._check_model_readiness(
-                    model_alias
-                )
-                if not is_ready:
-                    last_error = f"Model not ready: {readiness_error}"
-                    logger.info(f"Model {model_alias} not ready: {readiness_error}")
-                    if attempt < max_retries:
-                        continue
-                    else:
-                        break
-
-                # Model is ready
-                logger.debug(f"Model {model_alias} is ready")
+            is_ready, last_error = await self._perform_readiness_check(model_alias)
+            if is_ready:
                 return True, None
-
-            except Exception as e:
-                last_error = f"Readiness check error: {str(e)}"
-                logger.error(
-                    f"Error checking model readiness for {model_alias} (attempt {attempt + 1}): {e}"
-                )
-                if attempt == max_retries:
-                    break
 
         # All retries exhausted
         logger.error(
             f"Model readiness check for {model_alias} failed after {max_retries + 1} attempts. Last error: {last_error}"
         )
         return False, last_error
+
+    async def _perform_readiness_check(self, model_alias):
+        """Helper to perform a single readiness check, including starting the model if needed."""
+        try:
+            # Ensure model is started
+            if not await self.is_model_available(model_alias):
+                logger.info(f"Starting runner for model {model_alias}")
+                if not await self.start_runner_for_model(model_alias):
+                    return False, f"Failed to start model: {model_alias}"
+
+            # Wait for the newly started model to become ready
+            logger.debug(
+                f"Waiting for newly started model {model_alias} to become ready"
+            )
+            await self._wait_for_model_readiness(model_alias, max_wait_seconds=30)
+
+            # Do a pre-flight readiness check
+            is_ready, readiness_error = await self._check_model_readiness(model_alias)
+            if not is_ready:
+                logger.info(f"Model {model_alias} not ready: {readiness_error}")
+                return False, f"Model not ready: {readiness_error}"
+
+            # Model is ready
+            logger.debug(f"Model {model_alias} is ready")
+            return True, None
+
+        except Exception as e:
+            logger.error(f"Error checking model readiness for {model_alias}: {e}")
+            return False, f"Readiness check error: {str(e)}"
 
     async def _check_model_readiness(self, model_alias):
         """Check if a model is ready to handle requests by making a simple health check.

@@ -3,8 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <base href="/">
     <title>FlexLLama Status Dashboard</title>
-    <link rel="stylesheet" href="/frontend/styles.css">
+    <link rel="stylesheet" href="frontend/styles.css">
+    <script>
+        window.FLEXLLAMA_CONFIG = {
+            HEALTH_ENDPOINT: "__HEALTH_ENDPOINT__"
+        };
+    </script>
 </head>
 <body>
     <div class="container">
@@ -51,6 +57,6 @@
         </div>
     </div>
 
-    <script src="/frontend/script.js"></script>
+    <script src="frontend/script.js"></script>
 </body>
 </html> 
