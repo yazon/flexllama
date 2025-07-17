@@ -56,6 +56,7 @@ class APIServer:
                 # Dashboard routes
                 web.get("/", self.handle_dashboard),
                 web.get("/dashboard", self.handle_dashboard),
+                web.get("/health", self.handle_health),
                 web.static("/frontend", "frontend", show_index=True),
             ]
         )
@@ -138,9 +139,7 @@ class APIServer:
                 with open(dashboard_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 # Inject the health endpoint into the dashboard
-                content = content.replace(
-                    "__HEALTH_ENDPOINT__", self.health_endpoint
-                )
+                content = content.replace("__HEALTH_ENDPOINT__", self.health_endpoint)
                 return web.Response(text=content, content_type="text/html")
             else:
                 return web.Response(
