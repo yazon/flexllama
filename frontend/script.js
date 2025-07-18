@@ -27,6 +27,19 @@ function sanitizeHTML(text) {
     return element.innerHTML;
 }
 
+// Helper to generate safe, DOM-friendly IDs from runner names
+function slugify(text) {
+    return text
+        .toString()
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '-')      // Replace spaces with –
+        .replace(/[^\w\-]+/g, '') // Remove all non-word chars
+        .replace(/\-\-+/g, '-')   // Collapse multiple – to single
+        .replace(/^-+/, '')         // Trim – from start
+        .replace(/-+$/, '');        // Trim – from end
+}
+
 // Initialize the dashboard
 document.addEventListener('DOMContentLoaded', function() {
     console.log('🦙 FlexLLama Dashboard initialized');
@@ -162,6 +175,8 @@ function createRunnerCard(runnerName, data) {
     const card = document.createElement('div');
     card.className = `runner-card ${isActive ? 'active' : 'inactive'}`;
     
+    const runnerSlug = slugify(runnerName);
+    
     card.innerHTML = `
         <div class="runner-header">
             <h3 class="runner-title">${runnerName}</h3>
@@ -184,7 +199,7 @@ function createRunnerCard(runnerName, data) {
               '<div class="empty-state"><p>No models currently loaded</p></div>'}
         </div>
         
-        ${createControlPanel(runnerName, data)}
+        ${createControlPanel(runnerName, data, runnerSlug)}
     `;
     
     return card;
@@ -216,7 +231,7 @@ function createModelItem(model) {
 }
 
 // Create control panel for a runner
-function createControlPanel(runnerName, data) {
+function createControlPanel(runnerName, data, runnerSlug) {
     const { isActive } = data;
     const operationState = operationStates[runnerName];
     
@@ -236,7 +251,7 @@ function createControlPanel(runnerName, data) {
     const restartIcon = '↻'; 
 
     return `
-        <div class="runner-controls" data-runner="${sanitizeHTML(runnerName)}">
+        <div class="runner-controls" data-runner="${sanitizeHTML(runnerName)}" data-runner-slug="${runnerSlug}">
             <div class="control-buttons">
                 <button class="control-button btn-start ${isOperating && operationType === 'start' ? 'loading' : ''}" 
                         data-action="start" 
@@ -257,7 +272,7 @@ function createControlPanel(runnerName, data) {
                     <span class="btn-text">${isOperating && operationType === 'restart' ? 'Restarting...' : 'Restart'}</span>
                 </button>
             </div>
-            <div class="control-status ${operationState ? operationState.statusClass : ''}" id="status-${sanitizeHTML(runnerName)}">${operationState ? operationState.message : ''}</div>
+            <div class="control-status ${operationState ? operationState.statusClass : ''}" id="status-${runnerSlug}">${operationState ? operationState.message : ''}</div>
         </div>
     `;
 }
@@ -421,9 +436,14 @@ function clearOperationState(runnerName) {
 
 // Update runner control UI
 function updateRunnerControlUI(runnerName) {
-    const statusElement = document.getElementById(`status-${sanitizeHTML(runnerName)}`);
+    const runnerSlug = slugify(runnerName);
+    const statusElement = document.getElementById(`status-${runnerSlug}`);
+    const controlPanel = document.querySelector(`.runner-controls[data-runner-slug="${runnerSlug}"]`);
+
+    const state = operationStates[runnerName];
+
+    // Update status text / styles
     if (statusElement) {
-        const state = operationStates[runnerName];
         if (state) {
             statusElement.textContent = state.message;
             statusElement.className = `control-status ${state.statusClass}`;
@@ -432,9 +452,64 @@ function updateRunnerControlUI(runnerName) {
             statusElement.className = 'control-status';
         }
     }
-    
-    // Trigger a refresh to update button states
-    // Note: This will be updated when the next auto-refresh occurs
+
+    // Update button states & loading indicators immediately
+    if (!controlPanel) return;
+
+    const startBtn   = controlPanel.querySelector('.btn-start');
+    const stopBtn    = controlPanel.querySelector('.btn-stop');
+    const restartBtn = controlPanel.querySelector('.btn-restart');
+
+    const runnerCard = controlPanel.closest('.runner-card');
+    const isActive   = runnerCard && runnerCard.classList.contains('active');
+
+    const loadingIcon = STATUS_MAP.loading.icon;
+    const startIcon   = STATUS_MAP.start.icon;
+    const stopIcon    = STATUS_MAP.not_running.icon;
+    const restartIcon = '↻';
+
+    if (state && state.inProgress) {
+        // Disable all buttons while an operation is in progress
+        [startBtn, stopBtn, restartBtn].forEach(btn => {
+            if (!btn) return;
+            btn.disabled = true;
+            btn.classList.remove('loading');
+        });
+
+        // Highlight the button corresponding to the active operation
+        const setLoading = (btn, text) => {
+            if (!btn) return;
+            btn.classList.add('loading');
+            btn.querySelector('.btn-icon').textContent = loadingIcon;
+            btn.querySelector('.btn-text').textContent = text;
+        };
+
+        switch (state.type) {
+            case 'start':   setLoading(startBtn,   'Starting...');  break;
+            case 'stop':    setLoading(stopBtn,    'Stopping...');  break;
+            case 'restart': setLoading(restartBtn, 'Restarting...'); break;
+        }
+    } else {
+        // No operation – restore default button states based on runner activity
+        if (startBtn) {
+            startBtn.disabled = isActive;
+            startBtn.classList.remove('loading');
+            startBtn.querySelector('.btn-icon').textContent = startIcon;
+            startBtn.querySelector('.btn-text').textContent = 'Start';
+        }
+        if (stopBtn) {
+            stopBtn.disabled = !isActive;
+            stopBtn.classList.remove('loading');
+            stopBtn.querySelector('.btn-icon').textContent = stopIcon;
+            stopBtn.querySelector('.btn-text').textContent = 'Stop';
+        }
+        if (restartBtn) {
+            restartBtn.disabled = !isActive;
+            restartBtn.classList.remove('loading');
+            restartBtn.querySelector('.btn-icon').textContent = restartIcon;
+            restartBtn.querySelector('.btn-text').textContent = 'Restart';
+        }
+    }
 }
 
 // Show confirmation modal
