@@ -229,11 +229,11 @@ function createControlPanel(runnerName, data) {
     const canStop = isActive && !isOperating;
     const canRestart = isActive && !isOperating;
     
-    // Define icons from STATUS_MAP
+    // Define icons for control buttons
     const loadingIcon = STATUS_MAP.loading.icon;
     const startIcon = STATUS_MAP.start.icon;
     const stopIcon = STATUS_MAP.not_running.icon;
-    const restartIcon = STATUS_MAP.loading.icon; // Same icon for active and loading states
+    const restartIcon = '↻'; 
 
     return `
         <div class="runner-controls" data-runner="${sanitizeHTML(runnerName)}">
@@ -253,7 +253,7 @@ function createControlPanel(runnerName, data) {
                 <button class="control-button btn-restart ${isOperating && operationType === 'restart' ? 'loading' : ''}" 
                         data-action="restart" 
                         ${!canRestart ? 'disabled' : ''}>
-                    <span class="btn-icon">${restartIcon}</span>
+                    <span class="btn-icon">${isOperating && operationType === 'restart' ? loadingIcon : restartIcon}</span>
                     <span class="btn-text">${isOperating && operationType === 'restart' ? 'Restarting...' : 'Restart'}</span>
                 </button>
             </div>
@@ -421,7 +421,7 @@ function clearOperationState(runnerName) {
 
 // Update runner control UI
 function updateRunnerControlUI(runnerName) {
-    const statusElement = document.getElementById(`status-${runnerName}`);
+    const statusElement = document.getElementById(`status-${sanitizeHTML(runnerName)}`);
     if (statusElement) {
         const state = operationStates[runnerName];
         if (state) {
