@@ -123,7 +123,9 @@ class ConfigManager:
                 raise ValueError("API configuration missing required field: port")
             if not isinstance(api_config["port"], int):
                 raise ValueError("API port must be an integer")
-            if "health_endpoint" in api_config and not isinstance(api_config["health_endpoint"], str):
+            if "health_endpoint" in api_config and not isinstance(
+                api_config["health_endpoint"], str
+            ):
                 raise ValueError("API health_endpoint must be a string")
         else:
             raise ValueError("API configuration missing required field: api")

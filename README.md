@@ -77,7 +77,8 @@ Edit `config.json` to configure your runners and models:
     "auto_start_runners": true,
     "api": {
         "host": "0.0.0.0",
-        "port": 8080
+        "port": 8080,
+        "health_endpoint": "/health"
     },
     "runner1": {
         "type": "llama-server",

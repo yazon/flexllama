@@ -8,6 +8,7 @@ const CONFIG = {
 // Global state
 let refreshInterval = null;
 let lastUpdateTime = null;
+let operationStates = {};
 
 // Status mapping
 const STATUS_MAP = {
@@ -15,7 +16,8 @@ const STATUS_MAP = {
     'loading': { label: 'Loading', icon: '⟳', color: 'loading' },
     'error': { label: 'Error', icon: '✗', color: 'error' },
     'not_running': { label: 'Not Running', icon: '⏸', color: 'error' },
-    'not_loaded': { label: 'Not Loaded', icon: '○', color: 'error' }
+    'not_loaded': { label: 'Not Loaded', icon: '○', color: 'error' },
+    'start': { label: 'Start', icon: '▶' }
 };
 
 // Sanitize HTML to prevent XSS
@@ -23,6 +25,19 @@ function sanitizeHTML(text) {
     const element = document.createElement('div');
     element.innerText = text;
     return element.innerHTML;
+}
+
+// Helper to generate safe, DOM-friendly IDs from runner names
+function slugify(text) {
+    return text
+        .toString()
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '-')      // Replace spaces with –
+        .replace(/[^\w\-]+/g, '') // Remove all non-word chars
+        .replace(/\-\-+/g, '-')   // Collapse multiple – to single
+        .replace(/^-+/, '')         // Trim – from start
+        .replace(/-+$/, '');        // Trim – from end
 }
 
 // Initialize the dashboard
@@ -148,6 +163,9 @@ function updateRunnersSection(activeRunners, runnerModels, runnerInfo, modelHeal
             </div>
         `;
     }
+    
+    // Attach event listeners to control buttons
+    attachControlListeners();
 }
 
 // Create a runner card element
@@ -156,6 +174,8 @@ function createRunnerCard(runnerName, data) {
     
     const card = document.createElement('div');
     card.className = `runner-card ${isActive ? 'active' : 'inactive'}`;
+    
+    const runnerSlug = slugify(runnerName);
     
     card.innerHTML = `
         <div class="runner-header">
@@ -178,6 +198,8 @@ function createRunnerCard(runnerName, data) {
             ${models.length > 0 ? models.map(model => createModelItem(model)).join('') : 
               '<div class="empty-state"><p>No models currently loaded</p></div>'}
         </div>
+        
+        ${createControlPanel(runnerName, data, runnerSlug)}
     `;
     
     return card;
@@ -206,6 +228,345 @@ function createModelItem(model) {
             </div>
         </div>
     `;
+}
+
+// Create control panel for a runner
+function createControlPanel(runnerName, data, runnerSlug) {
+    const { isActive } = data;
+    const operationState = operationStates[runnerName];
+    
+    // Determine button states based on runner status and operation state
+    const isOperating = operationState && operationState.inProgress;
+    const operationType = operationState ? operationState.type : null;
+    
+    // Button enable/disable logic
+    const canStart = !isActive && !isOperating;
+    const canStop = isActive && !isOperating;
+    const canRestart = isActive && !isOperating;
+    
+    // Define icons for control buttons
+    const loadingIcon = STATUS_MAP.loading.icon;
+    const startIcon = STATUS_MAP.start.icon;
+    const stopIcon = STATUS_MAP.not_running.icon;
+    const restartIcon = '↻'; 
+
+    return `
+        <div class="runner-controls" data-runner="${sanitizeHTML(runnerName)}" data-runner-slug="${runnerSlug}">
+            <div class="control-buttons">
+                <button class="control-button btn-start ${isOperating && operationType === 'start' ? 'loading' : ''}" 
+                        data-action="start" 
+                        ${!canStart ? 'disabled' : ''}>
+                    <span class="btn-icon">${isOperating && operationType === 'start' ? loadingIcon : startIcon}</span>
+                    <span class="btn-text">${isOperating && operationType === 'start' ? 'Starting...' : 'Start'}</span>
+                </button>
+                <button class="control-button btn-stop ${isOperating && operationType === 'stop' ? 'loading' : ''}" 
+                        data-action="stop" 
+                        ${!canStop ? 'disabled' : ''}>
+                    <span class="btn-icon">${isOperating && operationType === 'stop' ? loadingIcon : stopIcon}</span>
+                    <span class="btn-text">${isOperating && operationType === 'stop' ? 'Stopping...' : 'Stop'}</span>
+                </button>
+                <button class="control-button btn-restart ${isOperating && operationType === 'restart' ? 'loading' : ''}" 
+                        data-action="restart" 
+                        ${!canRestart ? 'disabled' : ''}>
+                    <span class="btn-icon">${isOperating && operationType === 'restart' ? loadingIcon : restartIcon}</span>
+                    <span class="btn-text">${isOperating && operationType === 'restart' ? 'Restarting...' : 'Restart'}</span>
+                </button>
+            </div>
+            <div class="control-status ${operationState ? operationState.statusClass : ''}" id="status-${runnerSlug}">${operationState ? operationState.message : ''}</div>
+        </div>
+    `;
+}
+
+// Add event listeners to control buttons
+function attachControlListeners() {
+    document.querySelectorAll('.control-button').forEach(button => {
+        // Remove existing listeners to prevent duplicates
+        button.removeEventListener('click', handleControlClick);
+        button.addEventListener('click', handleControlClick);
+    });
+}
+
+// Handle control button clicks
+function handleControlClick(event) {
+    const button = event.currentTarget;
+    const action = button.getAttribute('data-action');
+    const runnerName = button.closest('.runner-controls').getAttribute('data-runner');
+    
+    if (button.disabled) return;
+    
+    switch (action) {
+        case 'start':
+            startRunner(runnerName);
+            break;
+        case 'stop':
+            confirmAndStopRunner(runnerName);
+            break;
+        case 'restart':
+            confirmAndRestartRunner(runnerName);
+            break;
+    }
+}
+
+// Start runner
+async function startRunner(runnerName) {
+    try {
+        setOperationState(runnerName, 'start', 'Starting runner...', 'status-info');
+        
+        const response = await fetch(`/v1/runners/${encodeURIComponent(runnerName)}/start`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            setOperationState(runnerName, null, 'Runner started successfully', 'status-success');
+            setTimeout(() => clearOperationState(runnerName), 3000);
+        } else {
+            const errorMsg = data.error ? data.error.message : 'Failed to start runner';
+            setOperationState(runnerName, null, errorMsg, 'status-error');
+            setTimeout(() => clearOperationState(runnerName), 5000);
+        }
+        
+    } catch (error) {
+        console.error('Error starting runner:', error);
+        setOperationState(runnerName, null, `Error: ${error.message}`, 'status-error');
+        setTimeout(() => clearOperationState(runnerName), 5000);
+    }
+}
+
+// Confirm and stop runner
+function confirmAndStopRunner(runnerName) {
+    showConfirmationModal(
+        'Stop Runner',
+        `Are you sure you want to stop runner "${runnerName}"? This will interrupt any ongoing operations and unload the current model.`,
+        () => stopRunner(runnerName)
+    );
+}
+
+// Stop runner
+async function stopRunner(runnerName) {
+    try {
+        setOperationState(runnerName, 'stop', 'Stopping runner...', 'status-info');
+        
+        const response = await fetch(`/v1/runners/${encodeURIComponent(runnerName)}/stop`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            setOperationState(runnerName, null, 'Runner stopped successfully', 'status-success');
+            setTimeout(() => clearOperationState(runnerName), 3000);
+        } else {
+            const errorMsg = data.error ? data.error.message : 'Failed to stop runner';
+            setOperationState(runnerName, null, errorMsg, 'status-error');
+            setTimeout(() => clearOperationState(runnerName), 5000);
+        }
+        
+    } catch (error) {
+        console.error('Error stopping runner:', error);
+        setOperationState(runnerName, null, `Error: ${error.message}`, 'status-error');
+        setTimeout(() => clearOperationState(runnerName), 5000);
+    }
+}
+
+// Confirm and restart runner
+function confirmAndRestartRunner(runnerName) {
+    showConfirmationModal(
+        'Restart Runner',
+        `Are you sure you want to restart runner "${runnerName}"? This will stop the runner, then start it again with the same model.`,
+        () => restartRunner(runnerName)
+    );
+}
+
+// Restart runner
+async function restartRunner(runnerName) {
+    try {
+        setOperationState(runnerName, 'restart', 'Restarting runner...', 'status-info');
+        
+        const response = await fetch(`/v1/runners/${encodeURIComponent(runnerName)}/restart`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            setOperationState(runnerName, null, 'Runner restarted successfully', 'status-success');
+            setTimeout(() => clearOperationState(runnerName), 3000);
+        } else {
+            const errorMsg = data.error ? data.error.message : 'Failed to restart runner';
+            setOperationState(runnerName, null, errorMsg, 'status-error');
+            setTimeout(() => clearOperationState(runnerName), 5000);
+        }
+        
+    } catch (error) {
+        console.error('Error restarting runner:', error);
+        setOperationState(runnerName, null, `Error: ${error.message}`, 'status-error');
+        setTimeout(() => clearOperationState(runnerName), 5000);
+    }
+}
+
+// Set operation state
+function setOperationState(runnerName, operationType, message, statusClass) {
+    operationStates[runnerName] = {
+        inProgress: operationType !== null,
+        type: operationType,
+        message: message,
+        statusClass: statusClass
+    };
+    
+    // Update the UI immediately
+    updateRunnerControlUI(runnerName);
+}
+
+// Clear operation state
+function clearOperationState(runnerName) {
+    delete operationStates[runnerName];
+    updateRunnerControlUI(runnerName);
+}
+
+// Update runner control UI
+function updateRunnerControlUI(runnerName) {
+    const runnerSlug = slugify(runnerName);
+    const statusElement = document.getElementById(`status-${runnerSlug}`);
+    const controlPanel = document.querySelector(`.runner-controls[data-runner-slug="${runnerSlug}"]`);
+
+    const state = operationStates[runnerName];
+
+    // Update status text / styles
+    if (statusElement) {
+        if (state) {
+            statusElement.textContent = state.message;
+            statusElement.className = `control-status ${state.statusClass}`;
+        } else {
+            statusElement.textContent = '';
+            statusElement.className = 'control-status';
+        }
+    }
+
+    // Update button states & loading indicators immediately
+    if (!controlPanel) return;
+
+    const startBtn   = controlPanel.querySelector('.btn-start');
+    const stopBtn    = controlPanel.querySelector('.btn-stop');
+    const restartBtn = controlPanel.querySelector('.btn-restart');
+
+    const runnerCard = controlPanel.closest('.runner-card');
+    const isActive   = runnerCard && runnerCard.classList.contains('active');
+
+    const loadingIcon = STATUS_MAP.loading.icon;
+    const startIcon   = STATUS_MAP.start.icon;
+    const stopIcon    = STATUS_MAP.not_running.icon;
+    const restartIcon = '↻';
+
+    if (state && state.inProgress) {
+        // Disable all buttons while an operation is in progress
+        [startBtn, stopBtn, restartBtn].forEach(btn => {
+            if (!btn) return;
+            btn.disabled = true;
+            btn.classList.remove('loading');
+        });
+
+        // Highlight the button corresponding to the active operation
+        const setLoading = (btn, text) => {
+            if (!btn) return;
+            btn.classList.add('loading');
+            btn.querySelector('.btn-icon').textContent = loadingIcon;
+            btn.querySelector('.btn-text').textContent = text;
+        };
+
+        switch (state.type) {
+            case 'start':   setLoading(startBtn,   'Starting...');  break;
+            case 'stop':    setLoading(stopBtn,    'Stopping...');  break;
+            case 'restart': setLoading(restartBtn, 'Restarting...'); break;
+        }
+    } else {
+        // No operation – restore default button states based on runner activity
+        if (startBtn) {
+            startBtn.disabled = isActive;
+            startBtn.classList.remove('loading');
+            startBtn.querySelector('.btn-icon').textContent = startIcon;
+            startBtn.querySelector('.btn-text').textContent = 'Start';
+        }
+        if (stopBtn) {
+            stopBtn.disabled = !isActive;
+            stopBtn.classList.remove('loading');
+            stopBtn.querySelector('.btn-icon').textContent = stopIcon;
+            stopBtn.querySelector('.btn-text').textContent = 'Stop';
+        }
+        if (restartBtn) {
+            restartBtn.disabled = !isActive;
+            restartBtn.classList.remove('loading');
+            restartBtn.querySelector('.btn-icon').textContent = restartIcon;
+            restartBtn.querySelector('.btn-text').textContent = 'Restart';
+        }
+    }
+}
+
+// Show confirmation modal
+function showConfirmationModal(title, message, onConfirm) {
+    // Remove existing modal if any
+    const existingModal = document.querySelector('.confirmation-modal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    const modal = document.createElement('div');
+    modal.className = 'confirmation-modal';
+    modal.innerHTML = `
+        <div class="confirmation-content">
+            <h3 class="confirmation-title">${sanitizeHTML(title)}</h3>
+            <p class="confirmation-message">${sanitizeHTML(message)}</p>
+            <div class="confirmation-buttons">
+                <button class="confirmation-button primary" data-action="confirm">Confirm</button>
+                <button class="confirmation-button secondary" data-action="cancel">Cancel</button>
+            </div>
+        </div>
+    `;
+
+    // ---------- helper to close & cleanup ----------
+    const closeModal = () => {
+        // Remove modal element if still in DOM
+        if (modal.parentNode) {
+            modal.remove();
+        }
+        // Always remove keydown listener to avoid leaks
+        document.removeEventListener('keydown', handleEsc);
+    };
+
+    // Close on ESC key
+    const handleEsc = (e) => {
+        if (e.key === 'Escape') {
+            closeModal();
+        }
+    };
+    document.addEventListener('keydown', handleEsc);
+
+    // ---------- button/background listeners ----------
+    modal.querySelector('[data-action="confirm"]').addEventListener('click', () => {
+        closeModal();
+        onConfirm();
+    });
+    
+    modal.querySelector('[data-action="cancel"]').addEventListener('click', closeModal);
+    
+    // Close on background click
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeModal();
+        }
+    });
+
+    document.body.appendChild(modal);
 }
 
 // Update models overview section
@@ -346,5 +707,8 @@ window.llama_dashboard = {
     stopAutoRefresh,
     showError,
     hideError,
+    startRunner,
+    stopRunner,
+    restartRunner,
     config: CONFIG
 }; 

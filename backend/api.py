@@ -47,15 +47,22 @@ class APIServer:
         self.app.add_routes(
             [
                 web.get("/v1/models", self.handle_models),
-                web.get(self.health_endpoint, self.handle_health),
                 web.post("/v1/chat/completions", self.handle_chat_completions),
                 web.post("/v1/completions", self.handle_completions),
                 web.post("/v1/embeddings", self.handle_embeddings),
                 web.post("/v1/rerank", self.handle_rerank),
                 web.options("/{tail:.*}", self.handle_options),
+                # Runner control routes
+                web.post("/v1/runners/{runner_name}/start", self.handle_runner_start),
+                web.post("/v1/runners/{runner_name}/stop", self.handle_runner_stop),
+                web.post(
+                    "/v1/runners/{runner_name}/restart", self.handle_runner_restart
+                ),
+                web.get("/v1/runners/status", self.handle_runners_status),
                 # Dashboard routes
                 web.get("/", self.handle_dashboard),
                 web.get("/dashboard", self.handle_dashboard),
+                web.get(self.health_endpoint, self.handle_health),
                 web.static("/frontend", "frontend", show_index=True),
             ]
         )
@@ -138,9 +145,7 @@ class APIServer:
                 with open(dashboard_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 # Inject the health endpoint into the dashboard
-                content = content.replace(
-                    "__HEALTH_ENDPOINT__", self.health_endpoint
-                )
+                content = content.replace("__HEALTH_ENDPOINT__", self.health_endpoint)
                 return web.Response(text=content, content_type="text/html")
             else:
                 return web.Response(
@@ -327,6 +332,252 @@ class APIServer:
         }
 
         return web.json_response(response)
+
+    async def handle_runner_start(self, request):
+        """Handle POST /v1/runners/{runner_name}/start requests.
+
+        Args:
+            request: The request.
+
+        Returns:
+            The response.
+        """
+        runner_name = request.match_info.get("runner_name")
+        if not runner_name:
+            return web.json_response(
+                {"success": False, "error": {"message": "Runner name not provided"}},
+                status=400,
+            )
+
+        # Check if runner exists
+        if runner_name not in self.runner_manager.get_runner_names():
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": {"message": f"Unknown runner: {runner_name}"},
+                },
+                status=404,
+            )
+
+        try:
+            # Start the runner
+            success = await self.runner_manager.start_runner(runner_name)
+
+            if success:
+                return web.json_response(
+                    {
+                        "success": True,
+                        "message": f"Runner {runner_name} started successfully",
+                        "runner_name": runner_name,
+                        "action": "start",
+                        "status": "starting",
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    }
+                )
+            else:
+                return web.json_response(
+                    {
+                        "success": False,
+                        "error": {
+                            "message": f"Failed to start runner: {runner_name}",
+                            "type": "runner_error",
+                            "runner_name": runner_name,
+                        },
+                    },
+                    status=500,
+                )
+
+        except Exception as e:
+            logger.error(f"Error starting runner {runner_name}: {e}")
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": {
+                        "message": f"Failed to start runner: {str(e)}",
+                        "type": "runner_error",
+                        "runner_name": runner_name,
+                    },
+                },
+                status=500,
+            )
+
+    async def handle_runner_stop(self, request):
+        """Handle POST /v1/runners/{runner_name}/stop requests.
+
+        Args:
+            request: The request.
+
+        Returns:
+            The response.
+        """
+        runner_name = request.match_info.get("runner_name")
+        if not runner_name:
+            return web.json_response(
+                {"success": False, "error": {"message": "Runner name not provided"}},
+                status=400,
+            )
+
+        # Check if runner exists
+        if runner_name not in self.runner_manager.get_runner_names():
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": {"message": f"Unknown runner: {runner_name}"},
+                },
+                status=404,
+            )
+
+        try:
+            # Stop the runner
+            success = await self.runner_manager.stop_runner(runner_name)
+
+            if success:
+                return web.json_response(
+                    {
+                        "success": True,
+                        "message": f"Runner {runner_name} stopped successfully",
+                        "runner_name": runner_name,
+                        "action": "stop",
+                        "status": "stopping",
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    }
+                )
+            else:
+                return web.json_response(
+                    {
+                        "success": False,
+                        "error": {
+                            "message": f"Failed to stop runner: {runner_name}",
+                            "type": "runner_error",
+                            "runner_name": runner_name,
+                        },
+                    },
+                    status=500,
+                )
+
+        except Exception as e:
+            logger.error(f"Error stopping runner {runner_name}: {e}")
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": {
+                        "message": f"Failed to stop runner: {str(e)}",
+                        "type": "runner_error",
+                        "runner_name": runner_name,
+                    },
+                },
+                status=500,
+            )
+
+    async def handle_runner_restart(self, request):
+        """Handle POST /v1/runners/{runner_name}/restart requests.
+
+        Args:
+            request: The request.
+
+        Returns:
+            The response.
+        """
+        runner_name = request.match_info.get("runner_name")
+        if not runner_name:
+            return web.json_response(
+                {"success": False, "error": {"message": "Runner name not provided"}},
+                status=400,
+            )
+
+        # Check if runner exists
+        if runner_name not in self.runner_manager.get_runner_names():
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": {"message": f"Unknown runner: {runner_name}"},
+                },
+                status=404,
+            )
+
+        try:
+            # Restart the runner (stop then start)
+            logger.info(f"Restarting runner {runner_name}")
+
+            # Stop first
+            stop_success = await self.runner_manager.stop_runner(runner_name)
+            if not stop_success:
+                logger.warning(
+                    f"Failed to stop runner {runner_name} during restart, continuing anyway"
+                )
+
+            # Wait a bit for cleanup
+            await asyncio.sleep(1)
+
+            # Start again
+            start_success = await self.runner_manager.start_runner(runner_name)
+
+            if start_success:
+                return web.json_response(
+                    {
+                        "success": True,
+                        "message": f"Runner {runner_name} restarted successfully",
+                        "runner_name": runner_name,
+                        "action": "restart",
+                        "status": "restarting",
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    }
+                )
+            else:
+                return web.json_response(
+                    {
+                        "success": False,
+                        "error": {
+                            "message": f"Failed to restart runner: {runner_name}",
+                            "type": "runner_error",
+                            "runner_name": runner_name,
+                        },
+                    },
+                    status=500,
+                )
+
+        except Exception as e:
+            logger.error(f"Error restarting runner {runner_name}: {e}")
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": {
+                        "message": f"Failed to restart runner: {str(e)}",
+                        "type": "runner_error",
+                        "runner_name": runner_name,
+                    },
+                },
+                status=500,
+            )
+
+    async def handle_runners_status(self, request):
+        """Handle GET /v1/runners/status requests.
+
+        Args:
+            request: The request.
+
+        Returns:
+            The response.
+        """
+        try:
+            status = await self.runner_manager.get_runner_status()
+            return web.json_response(
+                {
+                    "success": True,
+                    "runners": status,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Error getting runner status: {e}")
+            return web.json_response(
+                {
+                    "success": False,
+                    "error": {"message": f"Failed to get runner status: {str(e)}"},
+                },
+                status=500,
+            )
 
     async def handle_chat_completions(self, request):
         """Handle POST /v1/chat/completions requests.
