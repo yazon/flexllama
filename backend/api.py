@@ -47,7 +47,6 @@ class APIServer:
         self.app.add_routes(
             [
                 web.get("/v1/models", self.handle_models),
-                web.get(self.health_endpoint, self.handle_health),
                 web.post("/v1/chat/completions", self.handle_chat_completions),
                 web.post("/v1/completions", self.handle_completions),
                 web.post("/v1/embeddings", self.handle_embeddings),
@@ -63,7 +62,7 @@ class APIServer:
                 # Dashboard routes
                 web.get("/", self.handle_dashboard),
                 web.get("/dashboard", self.handle_dashboard),
-                web.get("/health", self.handle_health),
+                web.get(self.health_endpoint, self.handle_health),
                 web.static("/frontend", "frontend", show_index=True),
             ]
         )
