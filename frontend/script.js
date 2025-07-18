@@ -532,33 +532,40 @@ function showConfirmationModal(title, message, onConfirm) {
             </div>
         </div>
     `;
-    
-    // Add event listeners
+
+    // ---------- helper to close & cleanup ----------
+    const closeModal = () => {
+        // Remove modal element if still in DOM
+        if (modal.parentNode) {
+            modal.remove();
+        }
+        // Always remove keydown listener to avoid leaks
+        document.removeEventListener('keydown', handleEsc);
+    };
+
+    // Close on ESC key
+    const handleEsc = (e) => {
+        if (e.key === 'Escape') {
+            closeModal();
+        }
+    };
+    document.addEventListener('keydown', handleEsc);
+
+    // ---------- button/background listeners ----------
     modal.querySelector('[data-action="confirm"]').addEventListener('click', () => {
-        modal.remove();
+        closeModal();
         onConfirm();
     });
     
-    modal.querySelector('[data-action="cancel"]').addEventListener('click', () => {
-        modal.remove();
-    });
+    modal.querySelector('[data-action="cancel"]').addEventListener('click', closeModal);
     
     // Close on background click
     modal.addEventListener('click', (e) => {
         if (e.target === modal) {
-            modal.remove();
+            closeModal();
         }
     });
-    
-    // Close on ESC key
-    const handleEsc = (e) => {
-        if (e.key === 'Escape') {
-            modal.remove();
-            document.removeEventListener('keydown', handleEsc);
-        }
-    };
-    document.addEventListener('keydown', handleEsc);
-    
+
     document.body.appendChild(modal);
 }
 
