@@ -1,0 +1,85 @@
+# Multi-stage build for FlexLLama with CUDA-enabled llama.cpp support
+
+# Stage 1: Build llama.cpp with CUDA support
+FROM nvidia/cuda:12.1-devel-ubuntu22.04 AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone and build llama.cpp with CUDA support
+WORKDIR /build
+RUN git clone https://github.com/ggerganov/llama.cpp.git && \
+    cd llama.cpp && \
+    cmake -B build \
+        -DLLAMA_SERVER=ON \
+        -DLLAMA_CUBLAS=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=all && \
+    cmake --build build --config Release -j$(nproc) && \
+    cp build/bin/llama-server /usr/local/bin/
+
+# Stage 2: Runtime environment with CUDA runtime
+FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+
+# Install Python and runtime dependencies
+RUN apt-get update && apt-get install -y \
+    python3.12 \
+    python3.12-venv \
+    python3-pip \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/bin/python3.12 /usr/bin/python
+
+# Copy llama-server binary from builder stage
+COPY --from=builder /usr/local/bin/llama-server /usr/local/bin/
+
+# Create non-root user
+RUN useradd -r -m -s /bin/bash flexllama
+
+# Set working directory
+WORKDIR /app
+
+# Copy Python dependencies and install them
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir .
+
+# Copy application code
+COPY main.py ./
+COPY backend/ ./backend/
+COPY frontend/ ./frontend/
+COPY static/ ./static/
+
+# Create necessary directories
+RUN mkdir -p /app/models /app/logs /app/config && \
+    chown -R flexllama:flexllama /app
+
+# Create default config template
+COPY docker/config.json /app/config/config.json.template
+
+# Switch to non-root user
+USER flexllama
+
+# Expose ports
+# 8080: FlexLLama API and dashboard
+# 8085-8090: Default ports for llama-server runners
+EXPOSE 8080 8085 8086 8087 8088 8089 8090
+
+# Environment variables
+ENV FLEXLLAMA_CONFIG=/app/config.json
+ENV FLEXLLAMA_HOST=0.0.0.0
+ENV FLEXLLAMA_PORT=8080
+ENV PYTHONPATH=/app
+ENV CUDA_VISIBLE_DEVICES=0
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Entry point
+CMD ["python", "main.py", "/app/config.json"]

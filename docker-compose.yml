@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  flexllama:
+    build: .
+    container_name: flexllama
+    restart: unless-stopped
+    ports:
+      - "8080:8080"  # FlexLLama API and dashboard
+      - "8085:8085"  # Runner 1
+      - "8086:8086"  # Runner 2
+      - "8087:8087"  # Runner 3 (optional)
+      - "8088:8088"  # Runner 4 (optional)
+      - "8089:8089"  # Runner 5 (optional)
+      - "8090:8090"  # Runner 6 (optional)
+    volumes:
+      - ./docker/config.json:/app/config.json:ro  # Configuration file
+      - ./models:/app/models:ro                   # Model files directory
+      - ./logs:/app/logs                          # Logs directory
+      - /tmp:/tmp                                 # Temporary files
+    environment:
+      - FLEXLLAMA_CONFIG=/app/config.json
+      - FLEXLLAMA_HOST=0.0.0.0
+      - FLEXLLAMA_PORT=8080
+    networks:
+      - flexllama-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Optional: Separate container for GPU-specific workloads
+  # Uncomment and modify as needed for multi-GPU setups
+  # flexllama-gpu:
+  #   build: 
+  #     context: .
+  #     dockerfile: Dockerfile.cuda
+  #   container_name: flexllama-gpu
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8091:8080"
+  #   volumes:
+  #     - ./docker/config-gpu.json:/app/config.json:ro
+  #     - ./models:/app/models:ro
+  #     - ./logs-gpu:/app/logs
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=0
+  #     - FLEXLLAMA_CONFIG=/app/config.json
+  #   runtime: nvidia
+  #   networks:
+  #     - flexllama-network
+
+networks:
+  flexllama-network:
+    driver: bridge
+
+volumes:
+  models:
+    driver: local
+  logs:
+    driver: local
