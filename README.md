@@ -95,8 +95,10 @@
 
 4.  **Configure your models:**
     ```bash
-    # Edit the Docker configuration to point to your models
-    nano docker/config.json or nano docker/config-gpu.json 
+    # Edit the Docker configuration to point to your models (CPU or GPU)
+    nano docker/config.json
+    #   • CPU-only: keep "n_gpu_layers": 0
+    #   • GPU: set "n_gpu_layers" to e.g. 99 and specify "main_gpu": 0
     ```
 
 5.  **Start FlexLLama:**

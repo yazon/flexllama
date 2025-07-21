@@ -163,7 +163,7 @@ docker-compose up -d
 
 **Configuration Options**:
 - CPU-only: Use default `docker/config.json`
-- GPU-enabled: Use `docker/config-gpu.json` with `Dockerfile.cuda`
+- GPU-enabled: Edit `docker/config.json` (set `"n_gpu_layers": 99`, `"main_gpu": 0`) and build with `Dockerfile.cuda`
 - Custom ports: Set `FLEXLLAMA_PORT` environment variable
 
 ## Considerations

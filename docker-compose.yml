@@ -42,7 +42,7 @@ services:
   #   ports:
   #     - "8091:8080"
   #   volumes:
-  #     - ./docker/config-gpu.json:/app/config.json:ro
+  #     - ./docker/config.json:/app/config.json:ro
   #     - ./models:/app/models:ro
   #     - ./logs-gpu:/app/logs
   #   environment:
