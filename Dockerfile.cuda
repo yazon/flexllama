@@ -1,7 +1,7 @@
 # Multi-stage build for FlexLLama with CUDA-enabled llama.cpp support
 
 # Stage 1: Build llama.cpp with CUDA support
-FROM nvidia/cuda:12.1.0-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -14,30 +14,45 @@ RUN apt-get update && apt-get install -y \
     libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Make stub libraries visible and create missing SONAME
+ENV CUDA_STUB=/usr/local/cuda/lib64/stubs
+RUN ln -s $CUDA_STUB/libcuda.so $CUDA_STUB/libcuda.so.1 && \
+    echo "$CUDA_STUB" > /etc/ld.so.conf.d/cuda-stubs.conf && \
+    ldconfig
+ENV LIBRARY_PATH=$CUDA_STUB:${LIBRARY_PATH}
+
 # Clone and build llama.cpp with CUDA support
 WORKDIR /build
 RUN git clone https://github.com/ggerganov/llama.cpp.git && \
     cd llama.cpp && \
     cmake -B build \
+        -DBUILD_SHARED_LIBS=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=all-major \
         -DGGML_CUDA=ON \
         -DGGML_CUDA_F16=ON && \
     cmake --build build --config Release -j$(nproc) && \
     cp build/bin/llama-server /usr/local/bin/
 
 # Stage 2: Runtime environment with CUDA runtime
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
 
 # Install Python and runtime dependencies
 RUN apt-get update && apt-get install -y \
-    python3.12 \
-    python3.12-venv \
+    python3 \
+    python3-venv \
     python3-pip \
     curl \
+    jq \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -s /usr/bin/python3.12 /usr/bin/python
+    && ln -s /usr/bin/python3 /usr/bin/python
 
-# Copy llama-server binary from builder stage
-COPY --from=builder /usr/local/bin/llama-server /usr/local/bin/
+# Copy llama-server binary and required libraries
+COPY --from=builder /build/llama.cpp/build/bin/llama-server /usr/local/bin/
+
+# Create a virtual environment
+ENV VENV_PATH=/opt/venv
+RUN python3 -m venv $VENV_PATH
+ENV PATH="$VENV_PATH/bin:$PATH"
 
 # Create non-root user
 RUN useradd -r -m -s /bin/bash flexllama
@@ -54,13 +69,18 @@ COPY main.py ./
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 COPY static/ ./static/
+COPY docker/ ./docker/
 
-# Create necessary directories
+# Copy and setup entrypoint script
+COPY docker/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Create necessary directories and set permissions
 RUN mkdir -p /app/models /app/logs /app/config && \
-    chown -R flexllama:flexllama /app
+    chown -R flexllama:flexllama /app $VENV_PATH
 
-# Create default config template
-COPY docker/config.json /app/config/config.json.template
+# Create default config from template
+COPY docker/config.json /app/config.json
 
 # Switch to non-root user
 USER flexllama
@@ -75,12 +95,14 @@ ENV FLEXLLAMA_CONFIG=/app/config.json
 ENV FLEXLLAMA_HOST=0.0.0.0
 ENV FLEXLLAMA_PORT=8080
 ENV PYTHONPATH=/app
-ENV PATH=/usr/local/bin:$PATH
 ENV CUDA_VISIBLE_DEVICES=0
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Entry point
-CMD ["python", "main.py", "/app/config.json"]
+# Set entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]
+
+# Default command (can be overridden)
+CMD []

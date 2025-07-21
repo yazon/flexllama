@@ -47,6 +47,12 @@ setup_directories() {
 # Function to show usage examples
 show_examples() {
     echo ""
+    echo "📝 Next Steps:"
+    echo "   1. Place your .gguf model files in the models/ directory"
+    echo "   2. Edit docker/config.json to point to your models (set \"n_gpu_layers\" > 0 for GPU)"
+    echo "   3. Run one of the commands below"
+    echo "   4. Access the dashboard at http://localhost:8080"
+    echo ""
     echo "🚀 Usage Examples:"
     echo ""
     echo "1. Run with Docker command:"
@@ -57,12 +63,6 @@ show_examples() {
     echo ""
     echo "3. Run with custom configuration (specify alternate config if you renamed it):"
     echo "   docker run -p 8080:8080 -e FLEXLLAMA_CONFIG=/app/docker/config.json $IMAGE_TAG"
-    echo ""
-    echo "📝 Next Steps:"
-    echo "   1. Place your .gguf model files in the models/ directory"
-    echo "   2. Edit docker/config.json to point to your models (set \"n_gpu_layers\" > 0 for GPU)"
-    echo "   3. Run one of the commands above"
-    echo "   4. Access the dashboard at http://localhost:8080"
     echo ""
 }
 

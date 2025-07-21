@@ -28,17 +28,17 @@
     "models": [
         {
             "runner": "runner1",
-            "model": "/app/models/model1.gguf",
+            "model": "/app/models/Qwen2.5.1-Coder-7B-Instruct-Q4_K_M.gguf",
             "model_alias": "model1",
             "n_ctx": 4096,
             "n_batch": 512,
             "n_threads": 4,
             "offload_kqv": true,
             "flash_attn": true,
-            "use_mlock": false,
+            "use_mlock": true,
             "main_gpu": 0,
             "tensor_split": [1.0, 0.0],
-            "n_gpu_layers": 0,
+            "n_gpu_layers": 99,
             "jinja": true
         },
         {
