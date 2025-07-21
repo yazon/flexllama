@@ -14,12 +14,17 @@ RUN apt-get update && apt-get install -y \
     libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Make stub libraries visible and create missing SONAME
+# Set up CUDA environment for building
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+
+# Make stub libraries visible during build (for environments without GPU driver)
 ENV CUDA_STUB=/usr/local/cuda/lib64/stubs
-RUN ln -s $CUDA_STUB/libcuda.so $CUDA_STUB/libcuda.so.1 && \
-    echo "$CUDA_STUB" > /etc/ld.so.conf.d/cuda-stubs.conf && \
+RUN ln -s ${CUDA_STUB}/libcuda.so ${CUDA_STUB}/libcuda.so.1 && \
+    echo "${CUDA_STUB}" > /etc/ld.so.conf.d/cuda-stubs.conf && \
     ldconfig
-ENV LIBRARY_PATH=$CUDA_STUB:${LIBRARY_PATH}
+ENV LIBRARY_PATH=${CUDA_STUB}:${LIBRARY_PATH}
 
 # Clone and build llama.cpp with CUDA support
 WORKDIR /build
@@ -27,11 +32,14 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git && \
     cd llama.cpp && \
     cmake -B build \
         -DBUILD_SHARED_LIBS=ON \
+        -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CUDA_ARCHITECTURES=all-major \
         -DGGML_CUDA=ON \
-        -DGGML_CUDA_F16=ON && \
+        -DGGML_CUDA_F16=ON \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DLLAMA_BUILD_SERVER=ON && \
     cmake --build build --config Release -j$(nproc) && \
-    cp build/bin/llama-server /usr/local/bin/
+    cmake --install build
 
 # Stage 2: Runtime environment with CUDA runtime
 FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
@@ -46,8 +54,23 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/python3 /usr/bin/python
 
-# Copy llama-server binary and required libraries
-COPY --from=builder /build/llama.cpp/build/bin/llama-server /usr/local/bin/
+# Set up comprehensive library paths
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:/usr/local/bin:${PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:/usr/local/lib:/lib:/usr/lib:${LD_LIBRARY_PATH}
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# Copy llama-server binary
+COPY --from=builder /build/llama.cpp/build/bin/ /usr/local/bin/
+COPY --from=builder /build/llama.cpp/build/src/ /usr/local/lib/
+COPY --from=builder /build/llama.cpp/build/ggml/src/ /usr/local/lib/
+
+RUN find /usr/local/lib -name "*.so*" -exec chmod 644 {} \; && ldconfig
+# Ensure binaries are executable
+RUN chmod +x /usr/local/bin/*
+
+RUN ldconfig
 
 # Create a virtual environment
 ENV VENV_PATH=/opt/venv
