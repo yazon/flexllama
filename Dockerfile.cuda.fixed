@@ -41,6 +41,14 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git && \
     cmake --build build --config Release -j$(nproc) && \
     cmake --install build
 
+# Debug: List all built libraries
+RUN echo "=== All .so files in build directory ===" && \
+    find /build/llama.cpp/build -name "*.so*" -type f -exec ls -la {} \;
+
+# Debug: Check what was installed
+RUN echo "=== Installed files ===" && \
+    find /usr/local -name "*.so*" -type f -exec ls -la {} \;
+
 # Stage 2: Runtime environment with CUDA runtime
 FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
 
@@ -61,25 +69,24 @@ ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:/usr/local/lib:/lib:/usr/lib:${LD_LIBRARY
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# Copy llama-server binary
-COPY --from=builder /build/llama.cpp/build/bin/ /usr/local/bin/
-COPY --from=builder /build/llama.cpp/build/src/ /usr/local/lib/
-COPY --from=builder /build/llama.cpp/build/ggml/src/ /usr/local/lib/
+# Copy all binaries from the build
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
-# Copy the mtmd library (multimodal support)
-COPY --from=builder /build/llama.cpp/build/tools/mtmd/libmtmd.so* /usr/local/lib/
-# Also copy from the install location if it's there
-COPY --from=builder /usr/local/lib/libmtmd.so* /usr/local/lib/ || true
+# Copy all libraries from the install location
+COPY --from=builder /usr/local/lib/ /usr/local/lib/
 
-# Copy any other shared libraries that might have been built
-COPY --from=builder /build/llama.cpp/build/**/*.so* /usr/local/lib/ || true
-COPY --from=builder /usr/local/lib/*.so* /usr/local/lib/ || true
+# Also copy libraries directly from the build directory
+# This ensures we get all shared libraries including mtmd
+COPY --from=builder /build/llama.cpp/build/src/*.so* /usr/local/lib/ || true
+COPY --from=builder /build/llama.cpp/build/ggml/src/*.so* /usr/local/lib/ || true
+COPY --from=builder /build/llama.cpp/build/tools/mtmd/*.so* /usr/local/lib/ || true
+COPY --from=builder /build/llama.cpp/build/common/*.so* /usr/local/lib/ || true
 
-RUN find /usr/local/lib -name "*.so*" -exec chmod 644 {} \; && ldconfig
-# Ensure binaries are executable
-RUN chmod +x /usr/local/bin/*
+# Update library cache
+RUN ldconfig -v 2>&1 | grep -i mtmd || echo "mtmd not found in ldconfig"
 
-RUN ldconfig
+# Verify the libraries are accessible
+RUN ls -la /usr/local/lib/lib*.so* || echo "No shared libraries found"
 
 # Create a virtual environment
 ENV VENV_PATH=/opt/venv
