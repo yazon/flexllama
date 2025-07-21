@@ -29,6 +29,8 @@
 
 ## Quickstart
 
+### 📦 Local Installation
+
 1.  **Install FlexLLama:**
 
     *From GitHub:*
@@ -66,6 +68,56 @@
     ```
     http://localhost:8080
     ```
+
+### 🐳 Docker
+
+
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/yazon/flexllama.git
+    cd flexllama
+    ```
+
+2.  **Run the Docker setup script:**
+    ```bash
+    # For CPU-only setup
+    ./docker-start.sh
+
+    # For GPU support (CUDA)
+    ./docker-start.sh --gpu
+    ```
+
+3.  **Place your models:**
+    ```bash
+    # Copy your .gguf model files to the models/ directory
+    cp /path/to/your/model.gguf models/
+    ```
+
+4.  **Configure your models:**
+    ```bash
+    # Edit the Docker configuration to point to your models
+    nano docker/config.json or nano docker/config-gpu.json 
+    ```
+
+5.  **Start FlexLLama:**
+    ```bash
+    # Using Docker Compose (recommended)
+    docker-compose up -d
+    
+    # Or using Docker directly
+    docker run -d -p 8080:8080 \
+      -v $(pwd)/models:/app/models:ro \
+      -v $(pwd)/docker/config.json:/app/config.json:ro \
+      -v $(pwd)/logs:/app/logs \
+      flexllama
+    ```
+
+6.  **Open dashboard:**
+    ```
+    http://localhost:8080
+    ```
+
+For detailed Docker configuration and troubleshooting, see [`docker/README.md`](docker/README.md).
 
 ## Configuration
 

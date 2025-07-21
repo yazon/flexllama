@@ -1,7 +1,7 @@
 # Multi-stage build for FlexLLama with CUDA-enabled llama.cpp support
 
 # Stage 1: Build llama.cpp with CUDA support
-FROM nvidia/cuda:12.1-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.1.0-devel-ubuntu22.04 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     pkg-config \
     libssl-dev \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Clone and build llama.cpp with CUDA support
@@ -18,14 +19,13 @@ WORKDIR /build
 RUN git clone https://github.com/ggerganov/llama.cpp.git && \
     cd llama.cpp && \
     cmake -B build \
-        -DLLAMA_SERVER=ON \
-        -DLLAMA_CUBLAS=ON \
-        -DCMAKE_CUDA_ARCHITECTURES=all && \
+        -DGGML_CUDA=ON \
+        -DGGML_CUDA_F16=ON && \
     cmake --build build --config Release -j$(nproc) && \
     cp build/bin/llama-server /usr/local/bin/
 
 # Stage 2: Runtime environment with CUDA runtime
-FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 
 # Install Python and runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -75,6 +75,7 @@ ENV FLEXLLAMA_CONFIG=/app/config.json
 ENV FLEXLLAMA_HOST=0.0.0.0
 ENV FLEXLLAMA_PORT=8080
 ENV PYTHONPATH=/app
+ENV PATH=/usr/local/bin:$PATH
 ENV CUDA_VISIBLE_DEVICES=0
 
 # Health check

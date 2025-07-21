@@ -60,7 +60,7 @@ show_examples() {
     echo ""
     echo "📝 Next Steps:"
     echo "   1. Place your .gguf model files in the models/ directory"
-    echo "   2. Edit docker/config.json to point to your models"
+    echo "   2. Edit docker/config.json or docker/config-gpu.json to point to your models"
     echo "   3. Run one of the commands above"
     echo "   4. Access the dashboard at http://localhost:8080"
     echo ""
