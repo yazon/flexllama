@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y \
 # Set up CUDA environment for building
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=${CUDA_HOME}/bin:${PATH}
-ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 
 # Make stub libraries visible during build (for environments without GPU driver)
 ENV CUDA_STUB=/usr/local/cuda/lib64/stubs
@@ -66,7 +65,6 @@ RUN apt-get update && apt-get install -y \
 # Set up comprehensive library paths
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=${CUDA_HOME}/bin:/usr/local/bin:${PATH}
-ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:/usr/local/lib:/lib:/usr/lib:${LD_LIBRARY_PATH}
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 

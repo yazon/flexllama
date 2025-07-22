@@ -21,6 +21,38 @@ from backend.api import APIServer
 
 # Global session ID for organizing logs
 SESSION_ID = None
+SESSION_LOG_DIR = None
+
+
+def _get_writable_log_dir() -> str:
+    """
+    Determines and prepares a writable log directory.
+
+    It first checks the 'FLEXLLAMA_LOG_DIR' environment variable,
+    then defaults to 'logs'. If the target directory is not writable,
+    it falls back to a temporary directory.
+
+    Returns:
+        The path to the writable log directory.
+    """
+    preferred_dir = os.getenv("FLEXLLAMA_LOG_DIR", "logs")
+
+    try:
+        os.makedirs(preferred_dir, mode=0o777, exist_ok=True)
+        if os.access(preferred_dir, os.W_OK):
+            return preferred_dir
+    except OSError:
+        # Fallback will be handled below if creation or access fails
+        pass
+
+    # If we are here, the preferred_dir is not writable.
+    fallback_dir = f"/tmp/flexllama_logs_{os.getuid()}"
+    print(
+        f"Warning: Log directory '{preferred_dir}' not writable. "
+        f"Falling back to '{fallback_dir}'."
+    )
+    os.makedirs(fallback_dir, exist_ok=True)
+    return fallback_dir
 
 
 def setup_logging(debug: bool = False):
@@ -29,16 +61,19 @@ def setup_logging(debug: bool = False):
     Args:
         debug: Whether to enable debug logging.
     """
-    global SESSION_ID
+    global SESSION_ID, SESSION_LOG_DIR
 
     # Generate a unique session ID
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     session_uuid = str(uuid.uuid4())[:8]  # Use first 8 characters of UUID
     SESSION_ID = f"{timestamp}_{session_uuid}"
 
-    # Create session-specific log directory
-    log_dir = os.path.join("logs", SESSION_ID)
-    os.makedirs(log_dir, exist_ok=True)
+    # Determine and prepare log directory
+    base_log_dir = _get_writable_log_dir()
+
+    # Create session-specific log directory and store it globally
+    SESSION_LOG_DIR = os.path.join(base_log_dir, SESSION_ID)
+    os.makedirs(SESSION_LOG_DIR, exist_ok=True)
 
     # Set logging level
     log_level = logging.DEBUG if debug else logging.INFO
@@ -63,14 +98,14 @@ def setup_logging(debug: bool = False):
     root_logger.addHandler(console_handler)
 
     # Create file handler for main application logs
-    main_log_file = os.path.join(log_dir, "main.log")
+    main_log_file = os.path.join(SESSION_LOG_DIR, "main.log")
     file_handler = logging.FileHandler(main_log_file, mode="w", encoding="utf-8")
     file_handler.setLevel(log_level)
     file_handler.setFormatter(file_formatter)
     root_logger.addHandler(file_handler)
 
     # Create a file handler for errors only
-    error_log_file = os.path.join(log_dir, "errors.log")
+    error_log_file = os.path.join(SESSION_LOG_DIR, "errors.log")
     error_handler = logging.FileHandler(error_log_file, mode="w", encoding="utf-8")
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(file_formatter)
@@ -79,7 +114,7 @@ def setup_logging(debug: bool = False):
     # Log the setup
     logger = logging.getLogger(__name__)
     logger.info(f"Session ID: {SESSION_ID}")
-    logger.info(f"Session log directory: {log_dir}")
+    logger.info(f"Session log directory: {SESSION_LOG_DIR}")
     logger.info(
         f"Logging initialized - Console: {log_level}, Main log: {main_log_file}"
     )
@@ -101,9 +136,7 @@ def get_session_log_dir():
     Returns:
         The current session log directory path or None if not initialized.
     """
-    if SESSION_ID:
-        return os.path.join("logs", SESSION_ID)
-    return None
+    return SESSION_LOG_DIR
 
 
 def create_session_info(config_file_path):

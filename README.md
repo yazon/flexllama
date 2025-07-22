@@ -11,7 +11,6 @@
 ![GitHub last commit](https://img.shields.io/github/last-commit/yazon/flexllama?color=red)
 ![GitHub License](https://img.shields.io/github/license/yazon/flexllama)
 
-
 **FlexLLama** is a lightweight, extensible, and user-friendly self-hosted tool that easily runs multiple llama.cpp server instances with **OpenAI v1 API compatibility**. It's designed to manage multiple models across different GPUs, making it a powerful solution for local AI development and deployment.
 
 ## Key Features of FlexLLama
@@ -31,101 +30,182 @@
 
 ### 📦 Local Installation
 
-1.  **Install FlexLLama:**
+1. **Install FlexLLama:**
 
-    *From GitHub:*
-    ```bash
-    pip install git+https://github.com/yazon/flexllama.git
-    ```
+   *From GitHub:*
 
-    *From local source (after cloning):*
-    ```bash
-    # git clone https://github.com/yazon/flexllama.git
-    # cd flexllama
-    pip install .
-    ```
+   ```bash
+   pip install git+https://github.com/yazon/flexllama.git
+   ```
 
-2.  **Create your configuration:**
-    Copy the example configuration file to create your own. If you installed from a local clone, you can run:
-    ```bash
-    cp backend/config_example.json config.json
-    ```
-    If you installed from git, you may need to download it from the repository.
+   *From local source (after cloning):*
 
-3.  **Edit `config.json`:**
-    Update `config.json` with the correct paths for your `llama-server` binary and your model files (`.gguf`).
+   ```bash
+   # git clone https://github.com/yazon/flexllama.git
+   # cd flexllama
+   pip install .
+   ```
 
-4.  **Run FlexLLama:**
-    ```bash
-    python main.py config.json
-    ```
-    or
-    ```bash
-    flexllama config.json
-    ```
+1. **Create your configuration:**
+   Copy the example configuration file to create your own. If you installed from a local clone, you can run:
 
-5.  **Open dashboard:**
-    ```
-    http://localhost:8080
-    ```
+   ```bash
+   cp backend/config_example.json config.json
+   ```
+
+   If you installed from git, you may need to download it from the repository.
+
+1. **Edit `config.json`:**
+   Update `config.json` with the correct paths for your `llama-server` binary and your model files (`.gguf`).
+
+1. **Run FlexLLama:**
+
+   ```bash
+   python main.py config.json
+   ```
+
+   or
+
+   ```bash
+   flexllama config.json
+   ```
+
+1. **Open dashboard:**
+
+   ```
+   http://localhost:8080
+   ```
 
 ### 🐳 Docker
 
+FlexLLama can be run using Docker and Docker Compose. We provide profiles for both CPU-only and GPU-accelerated (NVIDIA CUDA) environments. 
 
-1.  **Clone the repository:**
+1. **Clone the repository:**
+
+   ```bash
+   git clone https://github.com/yazon/flexllama.git
+   cd flexllama
+   ```
+
+After cloning, you can proceed with the quick start script or a manual setup.
+
+---
+
+#### Using the Quick Start Script (`docker-start.sh`)
+
+For an easier start, the `docker-start.sh` helper script automates several setup steps. It checks your Docker environment, builds the correct image (CPU or GPU) and provides the commands to launch FlexLLama.
+
+1.  **Make the script executable:**
     ```bash
-    git clone https://github.com/yazon/flexllama.git
-    cd flexllama
+    chmod +x docker-start.sh
     ```
 
-2.  **Run the Docker setup script:**
-    ```bash
-    # For CPU-only setup
-    ./docker-start.sh
+2.  **Run the script:**
+    Use the `--gpu` flag for NVIDIA GPU support.
 
-    # For GPU support (CUDA)
+    *For CPU-only setup:*
+    ```bash
+    ./docker-start.sh
+    ```
+
+    *For GPU-accelerated setup:*
+    ```bash
     ./docker-start.sh --gpu
     ```
 
-3.  **Place your models:**
+3.  **Follow the on-screen instructions:**
+    The script will guide you.
+
+---
+**Manual Docker and Docker Compose Setup**
+
+If you prefer to run the steps manually, follow this guide:
+
+1.  **Place your models:**
+
     ```bash
-    # Copy your .gguf model files to the models/ directory
+    # Create the models directory if it doesn't exist
+    mkdir -p models
+    # Copy your .gguf model files into it
     cp /path/to/your/model.gguf models/
     ```
 
-4.  **Configure your models:**
+1. **Configure your models:**
+
+   ```bash
+   # Edit the Docker configuration to point to your models
+   #   • CPU-only: keep "n_gpu_layers": 0
+   #   • GPU: set "n_gpu_layers" to e.g. 99 and specify "main_gpu": 0
+   ```
+
+3.  **Build and Start FlexLLama with Docker Compose (Recommended):**
+    Use the `--profile` flag to select your environment. The service will be available at `http://localhost:8080`.
+
+    *For CPU-only:*
+
     ```bash
-    # Edit the Docker configuration to point to your models (CPU or GPU)
-    nano docker/config.json
-    #   • CPU-only: keep "n_gpu_layers": 0
-    #   • GPU: set "n_gpu_layers" to e.g. 99 and specify "main_gpu": 0
+    docker compose --profile cpu up --build -d
     ```
 
-5.  **Start FlexLLama:**
+    *For GPU support (NVIDIA CUDA):*
+
     ```bash
-    # Using Docker Compose (recommended)
-    docker-compose up -d
-    
-    # Or using Docker directly
-    docker run -d -p 8080:8080 \
-      -v $(pwd)/models:/app/models:ro \
-      -v $(pwd)/docker/config.json:/app/config.json:ro \
-      -v $(pwd)/logs:/app/logs \
-      flexllama
+    docker compose --profile gpu up --build -d
     ```
 
-6.  **Open dashboard:**
-    ```
-    http://localhost:8080
-    ```
+1. **View Logs**
+   To monitor the output of your services, you can view their logs in real-time.
 
-For detailed Docker configuration and troubleshooting, see [`docker/README.md`](docker/README.md).
+   *For the CPU service:*
+
+   ```bash
+   docker compose --profile cpu logs -f
+   ```
+
+   *For the GPU service:*
+
+   ```bash
+   docker compose --profile gpu logs -f
+   ```
+
+   *(Press `Ctrl+C` to stop viewing the logs.)*
+
+1. **(Alternative) Using `docker run`:**
+   You can also build and run the containers manually.
+
+   *For CPU-only:*
+
+   ```bash
+   # Build the image
+   docker build -t flexllama:latest .
+   # Run the container
+   docker run -d -p 8080:8080 \
+     -v $(pwd)/models:/app/models:ro \
+     -v $(pwd)/docker/config.json:/app/config.json:ro \
+     flexllama:latest
+   ```
+
+   *For GPU support (NVIDIA CUDA):*
+
+   ```bash
+   # Build the image
+   docker build -f Dockerfile.cuda -t flexllama-gpu:latest .
+   # Run the container
+   docker run -d --gpus all -p 8080:8080 \
+     -v $(pwd)/models:/app/models:ro \
+     -v $(pwd)/docker/config.json:/app/config.json:ro \
+     flexllama-gpu:latest
+   ```
+
+5.  **Open the dashboard:**
+    Access the FlexLLama dashboard in your browser: `http://localhost:8080`
 
 ## Configuration
 
 Edit `config.json` to configure your runners and models:
 
 ### Basic Structure
+
 ```json
 {
     "auto_start_runners": true,
@@ -154,6 +234,7 @@ Edit `config.json` to configure your runners and models:
 ```
 
 ### Multi-GPU Setup
+
 ```json
 {
     "runner_gpu0": {
@@ -187,6 +268,7 @@ Edit `config.json` to configure your runners and models:
 ### Key Configuration Options
 
 **Runner Options:**
+
 - `path`: Path to llama-server binary
 - `host`/`port`: Where to run this instance
 - `extra_args`: Additional arguments for llama-server
@@ -194,16 +276,19 @@ Edit `config.json` to configure your runners and models:
 **Model Options:**
 
 *Core Settings:*
+
 - `runner`: Which runner to use for this model
 - `model`: Path to .gguf model file
 - `model_alias`: Name to use in API calls
 
 *Model Types:*
+
 - `embedding`: Set to `true` for embedding models
 - `reranking`: Set to `true` for reranking models
 - `mmproj`: Path to multimodal projection file (for vision models)
 
 *Performance & Memory:*
+
 - `n_ctx`: Context window size (e.g., 4096, 8192, 32768)
 - `n_batch`: Batch size for processing (e.g., 256, 512)
 - `n_threads`: Number of CPU threads to use
@@ -214,16 +299,19 @@ Edit `config.json` to configure your runners and models:
 - `use_mlock`: Lock model in RAM to prevent swapping (`true`/`false`)
 
 *Optimization:*
+
 - `flash_attn`: Enable flash attention for faster processing (`true`/`false`)
 - `split_mode`: How to split model layers ("row" or other modes)
 - `cache-type-k`: Key cache quantization type (e.g., "q8_0")
 - `cache-type-v`: Value cache quantization type (e.g., "q8_0")
 
 *Chat & Templates:*
+
 - `chat_template`: Chat template format (e.g., "mistral-instruct", "gemma")
 - `jinja`: Enable Jinja templating (`true`/`false`)
 
 *Advanced Options:*
+
 - `rope-scaling`: RoPE scaling method (e.g., "linear")
 - `rope-scale`: RoPE scaling factor (e.g., 2)
 - `yarn-orig-ctx`: Original context size for YaRN scaling

@@ -4,7 +4,7 @@ set -e
 
 # FlexLLama Docker Quick Start Script
 echo "================================================"
-echo "FlexLLama Docker Quick Start"
+echo "FlexLLama Docker Setup"
 echo "================================================"
 
 # Function to check if Docker is running
@@ -27,12 +27,12 @@ build_image() {
     echo "🔨 Building FlexLLama Docker image..."
     if [[ "$1" == "--gpu" ]]; then
         echo "   Building with GPU support..."
-        docker build -f Dockerfile.cuda -t flexllama:gpu .
-        IMAGE_TAG="flexllama:gpu"
+        docker build -f Dockerfile.cuda -t flexllama-gpu:latest .
+        IMAGE_TAG="flexllama-gpu:latest"
     else
         echo "   Building CPU-only version..."
-        docker build -t flexllama .
-        IMAGE_TAG="flexllama"
+        docker build -t flexllama:latest .
+        IMAGE_TAG="flexllama:latest"
     fi
     echo "✅ Image built successfully: $IMAGE_TAG"
 }
@@ -48,21 +48,31 @@ setup_directories() {
 show_examples() {
     echo ""
     echo "📝 Next Steps:"
-    echo "   1. Place your .gguf model files in the models/ directory"
-    echo "   2. Edit docker/config.json to point to your models (set \"n_gpu_layers\" > 0 for GPU)"
-    echo "   3. Run one of the commands below"
+    echo "   1. Place your .gguf model files in the models/ directory."
+    echo "   2. Edit docker/config.json to point to your models (set 'n_gpu_layers' > 0 for GPU)."
+    echo "   3. Run one of the commands below to start the service."
     echo "   4. Access the dashboard at http://localhost:8080"
     echo ""
     echo "🚀 Usage Examples:"
     echo ""
-    echo "1. Run with Docker command:"
-    echo "   docker run -p 8080:8080 -v \$(pwd)/models:/app/models -v \$(pwd)/logs:/app/logs $IMAGE_TAG"
+    echo "1. Run with Docker Compose (Recommended):"
+    if [[ "$GPU_OPTION" == "--gpu" ]]; then
+        echo "   # Start the GPU service:"
+        echo "   docker compose --profile gpu up -d"
+    else
+        echo "   # Start the CPU service:"
+        echo "   docker compose --profile cpu up -d"
+    fi
     echo ""
-    echo "2. Run with Docker Compose:"
-    echo "   docker-compose up -d"
-    echo ""
-    echo "3. Run with custom configuration (specify alternate config if you renamed it):"
-    echo "   docker run -p 8080:8080 -e FLEXLLAMA_CONFIG=/app/docker/config.json $IMAGE_TAG"
+    echo "2. Run with a direct 'docker run' command:"
+    if [[ "$GPU_OPTION" == "--gpu" ]]; then
+        echo "   docker run -d --gpus all -p 8080:8080 \\"
+    else
+        echo "   docker run -d -p 8080:8080 \\"
+    fi
+    echo "     -v \$(pwd)/models:/app/models:ro \\"
+    echo "     -v \$(pwd)/docker/config.json:/app/config.json:ro \\"
+    echo "     $IMAGE_TAG"
     echo ""
 }
 

@@ -28,7 +28,7 @@
     "models": [
         {
             "runner": "runner1",
-            "model": "/app/models/Qwen2.5.1-Coder-7B-Instruct-Q4_K_M.gguf",
+            "model": "/app/models/model1.gguf",
             "model_alias": "model1",
             "n_ctx": 4096,
             "n_batch": 512,
@@ -45,7 +45,7 @@
             "runner": "runner2",
             "model": "/app/models/model2.gguf",
             "model_alias": "model2",
-            "n_ctx": 8192,
+            "n_ctx": 16384,
             "n_batch": 256,
             "n_threads": 8,
             "chat_template": "mistral-instruct",
