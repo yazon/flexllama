@@ -81,7 +81,7 @@ COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Create necessary directories
-RUN mkdir -p /app/models /app/logs /app/config && \
+RUN mkdir -p /app/models /app/config && \
     chown -R flexllama:flexllama /app
 
 # Create default config from template
