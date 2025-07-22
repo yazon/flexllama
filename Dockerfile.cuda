@@ -1,0 +1,139 @@
+# Multi-stage build for FlexLLama with CUDA-enabled llama.cpp support
+
+# Stage 1: Build llama.cpp with CUDA support
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    pkg-config \
+    libssl-dev \
+    libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up CUDA environment for building
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+
+# Make stub libraries visible during build (for environments without GPU driver)
+ENV CUDA_STUB=/usr/local/cuda/lib64/stubs
+RUN ln -s ${CUDA_STUB}/libcuda.so ${CUDA_STUB}/libcuda.so.1 && \
+    echo "${CUDA_STUB}" > /etc/ld.so.conf.d/cuda-stubs.conf && \
+    ldconfig
+ENV LIBRARY_PATH=${CUDA_STUB}:${LIBRARY_PATH}
+
+# Clone and build llama.cpp with CUDA support
+WORKDIR /build
+
+RUN git clone https://github.com/ggerganov/llama.cpp.git && \
+    cd llama.cpp && \
+    cmake -B build \
+        -DBUILD_SHARED_LIBS=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CUDA_ARCHITECTURES=all-major \
+        -DGGML_CUDA=ON \
+        -DGGML_CUDA_F16=ON \
+        -DCMAKE_INSTALL_PREFIX=/opt/llama.cpp \
+        -DLLAMA_BUILD_SERVER=ON && \
+    cmake --build build --config Release -j$(nproc) && \
+    cmake --install build && \
+     # Copy all built libraries to a persistent location before the layer ends
+     mkdir -p /opt/llama.cpp/lib && \
+     find build -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; && \
+     # Specifically ensure libmtmd.so is copied
+     find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true && \
+     # List what we have for debugging
+     echo "=== Libraries in /opt/llama.cpp/lib ===" && \
+     ls -la /opt/llama.cpp/lib/
+
+# Stage 2: Runtime environment with CUDA runtime
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
+
+# Install Python and runtime dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-venv \
+    python3-pip \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/bin/python3 /usr/bin/python
+
+# Set up comprehensive library paths
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:/usr/local/bin:${PATH}
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# Copy everything from the installed location
+COPY --from=builder /opt/llama.cpp/ /usr/local/
+ 
+# Ensure all libraries are properly linked
+RUN ldconfig && \
+    # Verify libmtmd.so is available
+    ldconfig -p | grep mtmd || echo "Warning: libmtmd.so not found in ldconfig" && \
+    # Check if llama-server can find all its dependencies
+    ldd /usr/local/bin/llama-server || echo "Warning: Some dependencies might be missing"
+
+# Create a virtual environment
+ENV VENV_PATH=/opt/venv
+RUN python3 -m venv $VENV_PATH
+ENV PATH="$VENV_PATH/bin:$PATH"
+
+# Create non-root user
+RUN useradd -r -m -s /bin/bash flexllama
+
+# Set working directory
+WORKDIR /app
+
+# Copy Python dependencies and install them
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir .
+
+# Copy application code
+COPY main.py ./
+COPY backend/ ./backend/
+COPY frontend/ ./frontend/
+COPY static/ ./static/
+COPY docker/ ./docker/
+
+# Copy and setup entrypoint script
+COPY docker/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Create necessary directories and set permissions.
+# The 'logs' directory is intentionally omitted; it will be created at runtime
+# by the application to ensure it has the correct ownership.
+RUN mkdir -p /app/models /app/config && \
+    chown -R flexllama:flexllama /app $VENV_PATH
+
+# Create default config from template
+COPY docker/config.json /app/config.json
+
+# Switch to non-root user
+USER flexllama
+
+# Expose ports
+# 8080: FlexLLama API and dashboard
+# 8085-8090: Default ports for llama-server runners
+EXPOSE 8080 8085 8086 8087 8088 8089 8090
+
+# Environment variables
+ENV FLEXLLAMA_CONFIG=/app/config.json
+ENV FLEXLLAMA_HOST=0.0.0.0
+ENV FLEXLLAMA_PORT=8080
+ENV PYTHONPATH=/app
+ENV CUDA_VISIBLE_DEVICES=0
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Set entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]
+
+# Default command (can be overridden)
+CMD []
