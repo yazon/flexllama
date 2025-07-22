@@ -12,6 +12,7 @@ import logging
 import asyncio
 import platform
 import uuid
+import tempfile
 from datetime import datetime
 import json
 
@@ -46,7 +47,18 @@ def _get_writable_log_dir() -> str:
         pass
 
     # If we are here, the preferred_dir is not writable.
-    fallback_dir = f"/tmp/flexllama_logs_{os.getuid()}"
+    # Use a cross-platform approach for fallback directory
+    temp_base = tempfile.gettempdir()
+
+    # Create a unique identifier that works on all platforms
+    try:
+        # Try to use user ID on Unix systems
+        user_id = str(os.getuid())
+    except AttributeError:
+        # On Windows, use username instead
+        user_id = os.getenv("USERNAME", "user")
+
+    fallback_dir = os.path.join(temp_base, f"flexllama_logs_{user_id}")
     print(
         f"Warning: Log directory '{preferred_dir}' not writable. "
         f"Falling back to '{fallback_dir}'."

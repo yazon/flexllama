@@ -84,8 +84,8 @@ RUN chmod +x /app/entrypoint.sh
 RUN mkdir -p /app/models /app/logs /app/config && \
     chown -R flexllama:flexllama /app
 
-# Create default config template
-COPY docker/config.json /app/config/config.json.template
+# Create default config from template
+COPY docker/config.json /app/config.json
 
 # Switch to non-root user
 USER flexllama
