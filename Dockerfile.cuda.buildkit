@@ -1,4 +1,6 @@
+# syntax=docker/dockerfile:1
 # Multi-stage build for FlexLLama with CUDA-enabled llama.cpp support
+# This version uses BuildKit features for better caching
 
 # Stage 1: Build llama.cpp with CUDA support
 FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS builder
@@ -29,12 +31,18 @@ ENV LIBRARY_PATH=${CUDA_STUB}:${LIBRARY_PATH}
 # Clone and build llama.cpp with CUDA support
 WORKDIR /build
 
-# Add a build argument to force rebuild when needed
-ARG FORCE_REBUILD=0
+# Use BuildKit cache mount for git repository
+RUN --mount=type=cache,target=/cache/git \
+    if [ ! -d /cache/git/llama.cpp ]; then \
+        git clone https://github.com/ggerganov/llama.cpp.git /cache/git/llama.cpp; \
+    else \
+        cd /cache/git/llama.cpp && git pull; \
+    fi && \
+    cp -r /cache/git/llama.cpp /build/llama.cpp
 
-# Clone, build, and install in a single RUN command to ensure everything is in the same layer
-RUN git clone https://github.com/ggerganov/llama.cpp.git && \
-    cd llama.cpp && \
+# Build with cache mount for build artifacts
+RUN --mount=type=cache,target=/cache/build \
+    cd /build/llama.cpp && \
     cmake -B build \
         -DBUILD_SHARED_LIBS=ON \
         -DCMAKE_BUILD_TYPE=Release \
@@ -45,14 +53,11 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git && \
         -DLLAMA_BUILD_SERVER=ON && \
     cmake --build build --config Release -j$(nproc) && \
     cmake --install build && \
-    # Copy all built libraries to a persistent location before the layer ends
-    mkdir -p /opt/llama.cpp/lib && \
-    find build -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; && \
-    # Specifically ensure libmtmd.so is copied
-    find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true && \
-    # List what we have for debugging
-    echo "=== Libraries in /opt/llama.cpp/lib ===" && \
-    ls -la /opt/llama.cpp/lib/
+    # Ensure all libraries including libmtmd.so are in the install directory
+    find build -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true && \
+    # Debug output
+    echo "=== Installed libraries ===" && \
+    find /opt/llama.cpp/lib -name "*.so*" -type f -exec ls -la {} \;
 
 # Stage 2: Runtime environment with CUDA runtime
 FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
@@ -74,15 +79,15 @@ ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:/usr/local/lib:/lib:/usr/lib:${LD_LIBRARY
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# Copy everything from the installed location
+# Copy everything from the builder's install location
 COPY --from=builder /opt/llama.cpp/ /usr/local/
 
-# Ensure all libraries are properly linked
-RUN ldconfig && \
-    # Verify libmtmd.so is available
-    ldconfig -p | grep mtmd || echo "Warning: libmtmd.so not found in ldconfig" && \
-    # Check if llama-server can find all its dependencies
-    ldd /usr/local/bin/llama-server || echo "Warning: Some dependencies might be missing"
+# Update library cache and verify installation
+RUN ldconfig -v 2>&1 | grep -E "(mtmd|llama|ggml)" || echo "Libraries registered" && \
+    echo "=== Checking llama-server dependencies ===" && \
+    ldd /usr/local/bin/llama-server && \
+    echo "=== Libraries in /usr/local/lib ===" && \
+    ls -la /usr/local/lib/*.so* | head -20
 
 # Create a virtual environment
 ENV VENV_PATH=/opt/venv
@@ -97,7 +102,8 @@ WORKDIR /app
 
 # Copy Python dependencies and install them
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir .
 
 # Copy application code
 COPY main.py ./
@@ -121,8 +127,6 @@ COPY docker/config.json /app/config.json
 USER flexllama
 
 # Expose ports
-# 8080: FlexLLama API and dashboard
-# 8085-8090: Default ports for llama-server runners
 EXPOSE 8080 8085 8086 8087 8088 8089 8090
 
 # Environment variables
