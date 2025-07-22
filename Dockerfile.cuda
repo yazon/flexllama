@@ -28,6 +28,7 @@ ENV LIBRARY_PATH=${CUDA_STUB}:${LIBRARY_PATH}
 
 # Clone and build llama.cpp with CUDA support
 WORKDIR /build
+
 RUN git clone https://github.com/ggerganov/llama.cpp.git && \
     cd llama.cpp && \
     cmake -B build \
@@ -36,10 +37,18 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git && \
         -DCMAKE_CUDA_ARCHITECTURES=all-major \
         -DGGML_CUDA=ON \
         -DGGML_CUDA_F16=ON \
-        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DCMAKE_INSTALL_PREFIX=/opt/llama.cpp \
         -DLLAMA_BUILD_SERVER=ON && \
     cmake --build build --config Release -j$(nproc) && \
-    cmake --install build
+    cmake --install build && \
+     # Copy all built libraries to a persistent location before the layer ends
+     mkdir -p /opt/llama.cpp/lib && \
+     find build -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; && \
+     # Specifically ensure libmtmd.so is copied
+     find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true && \
+     # List what we have for debugging
+     echo "=== Libraries in /opt/llama.cpp/lib ===" && \
+     ls -la /opt/llama.cpp/lib/
 
 # Stage 2: Runtime environment with CUDA runtime
 FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
@@ -61,16 +70,15 @@ ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:/usr/local/lib:/lib:/usr/lib:${LD_LIBRARY
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# Copy llama-server binary
-COPY --from=builder /build/llama.cpp/build/bin/ /usr/local/bin/
-COPY --from=builder /build/llama.cpp/build/src/ /usr/local/lib/
-COPY --from=builder /build/llama.cpp/build/ggml/src/ /usr/local/lib/
-
-RUN find /usr/local/lib -name "*.so*" -exec chmod 644 {} \; && ldconfig
-# Ensure binaries are executable
-RUN chmod +x /usr/local/bin/*
-
-RUN ldconfig
+# Copy everything from the installed location
+COPY --from=builder /opt/llama.cpp/ /usr/local/
+ 
+# Ensure all libraries are properly linked
+RUN ldconfig && \
+    # Verify libmtmd.so is available
+    ldconfig -p | grep mtmd || echo "Warning: libmtmd.so not found in ldconfig" && \
+    # Check if llama-server can find all its dependencies
+    ldd /usr/local/bin/llama-server || echo "Warning: Some dependencies might be missing"
 
 # Create a virtual environment
 ENV VENV_PATH=/opt/venv
@@ -98,8 +106,10 @@ COPY docker/ ./docker/
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Create necessary directories and set permissions
-RUN mkdir -p /app/models /app/logs /app/config && \
+# Create necessary directories and set permissions.
+# The 'logs' directory is intentionally omitted; it will be created at runtime
+# by the application to ensure it has the correct ownership.
+RUN mkdir -p /app/models /app/config && \
     chown -R flexllama:flexllama /app $VENV_PATH
 
 # Create default config from template
