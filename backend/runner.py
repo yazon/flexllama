@@ -16,6 +16,7 @@ import socket
 import aiohttp
 import json
 import psutil
+import shlex
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
@@ -625,11 +626,23 @@ class RunnerProcess:
 
         # Add model-specific arguments
         if "args" in model_config and model_config["args"].strip():
-            model_args = model_config["args"].strip().split()
-            cmd.extend(model_args)
-            logger.debug(
-                f"Command building: After model args, {len(cmd)} items: added {len(model_args)} args"
-            )
+            try:
+                model_args = shlex.split(model_config["args"].strip())
+                cmd.extend(model_args)
+                logger.debug(
+                    f"Command building: After model args, {len(cmd)} items: added {len(model_args)} args"
+                )
+            except ValueError as e:
+                logger.error(
+                    f"Failed to parse model args '{model_config['args']}': {e}. "
+                    "Please check for unmatched quotes or invalid shell syntax."
+                )
+                # Fallback to simple split for malformed arguments
+                model_args = model_config["args"].strip().split()
+                cmd.extend(model_args)
+                logger.debug(
+                    f"Command building: Using fallback split, {len(cmd)} items: added {len(model_args)} args"
+                )
 
         # Add extra arguments
         cmd.extend(self.runner_config.get("extra_args", []))
