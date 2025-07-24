@@ -271,7 +271,7 @@ Edit `config.json` to configure your runners and models:
 
 - `path`: Path to llama-server binary
 - `host`/`port`: Where to run this instance
-- `extra_args`: Additional arguments for llama-server
+- `extra_args`: Additional arguments for llama-server (applied to all models using this runner)
 
 **Model Options:**
 
@@ -316,6 +316,7 @@ Edit `config.json` to configure your runners and models:
 - `rope-scale`: RoPE scaling factor (e.g., 2)
 - `yarn-orig-ctx`: Original context size for YaRN scaling
 - `pooling`: Pooling method for embeddings (e.g., "cls")
+- `args`: Additional custom arguments to pass directly to llama-server for this specific model (string, e.g., "--custom-flag --param value"). These are applied after all other model parameters and before runner `extra_args`.
 
 ## Testing
 

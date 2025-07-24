@@ -623,6 +623,14 @@ class RunnerProcess:
                 f"Command building: After yarn-orig-ctx, {len(cmd)} items: {cmd[-2:]}"
             )
 
+        # Add model-specific arguments
+        if "args" in model_config and model_config["args"].strip():
+            model_args = model_config["args"].strip().split()
+            cmd.extend(model_args)
+            logger.debug(
+                f"Command building: After model args, {len(cmd)} items: added {len(model_args)} args"
+            )
+
         # Add extra arguments
         cmd.extend(self.runner_config.get("extra_args", []))
 

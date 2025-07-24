@@ -237,6 +237,7 @@ class ConfigManager:
             "rope-scaling",
             "cache-type-k",
             "cache-type-v",
+            "args",
         ]
         for field in str_fields:
             if field in model and not isinstance(model[field], str):
