@@ -39,7 +39,8 @@
             "main_gpu": 0,
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 99,
-            "jinja": true
+            "jinja": true,
+            "args": ""
         },
         {
             "runner": "runner2",
@@ -58,7 +59,14 @@
             "jinja": true,
             "split_mode": "row",
             "cache-type-k": "q8_0",
-            "cache-type-v": "q8_0"
+            "cache-type-v": "q8_0",
+            "args": "--some-custom-arg --another-arg value"
+        },
+        {
+            "runner": "runner2",
+            "model": "/path/to/model3.gguf",
+            "model_alias": "model3",
+            "args": "--ctx-size 8000 --batch-size 512 --threads 8 --flash-attn --mlock"
         },
         {
             "runner": "runner1",
@@ -76,7 +84,8 @@
             "n_gpu_layers": 99,
             "rope-scaling": "linear",
             "rope-scale": 2,
-            "yarn-orig-ctx": 32768
+            "yarn-orig-ctx": 32768,
+            "args": ""
         },
         {
             "runner": "runner2",
@@ -90,7 +99,8 @@
             "use_mlock": true,
             "reranking": true,
             "tensor_split": [1.0, 0.0],
-            "n_gpu_layers": 99
+            "n_gpu_layers": 99,
+            "args": ""
         },
         {
             "runner": "runner1",
@@ -105,7 +115,8 @@
             "embedding": true,
             "pooling": "cls",
             "tensor_split": [1.0, 0.0],
-            "n_gpu_layers": 99
+            "n_gpu_layers": 99,
+            "args": ""
         }
     ]
 }

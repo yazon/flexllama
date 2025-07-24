@@ -39,7 +39,8 @@
             "main_gpu": 0,
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 99,
-            "jinja": true
+            "jinja": true,
+            "args": ""
         },
         {
             "runner": "runner2",
@@ -58,7 +59,8 @@
             "jinja": true,
             "split_mode": "row",
             "cache-type-k": "q8_0",
-            "cache-type-v": "q8_0"
+            "cache-type-v": "q8_0",
+            "args": ""
         }
     ]
 }
