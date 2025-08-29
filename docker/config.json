@@ -14,53 +14,58 @@
     "runner1": {
         "type": "llama-server",
         "path": "/usr/local/bin/llama-server",
-        "host": "127.0.0.1",
+        "host": "0.0.0.0",
         "port": 8085,
-        "extra_args": ["--verbose"]
+        "extra_args": ["--verbose", "--no-mmap"]
     },
     "runner2": {
         "type": "llama-server",
         "path": "/usr/local/bin/llama-server",
-        "host": "127.0.0.1",
+        "host": "0.0.0.0",
         "port": 8086,
-        "extra_args": []
+        "extra_args": ["--verbose", "--no-mmap"]
     },
+
     "models": [
         {
             "runner": "runner1",
-            "model": "/app/models/model1.gguf",
-            "model_alias": "model1",
+            "model": "/app/models/huihui-gpt-oss-20b.gguf",
+            "model_alias": "huihui-gpt-oss-20b",
             "n_ctx": 4096,
             "n_batch": 512,
-            "n_threads": 4,
+            "n_threads": 20,
             "offload_kqv": true,
-            "flash_attn": true,
+            "flash_attn": false,
             "use_mlock": true,
             "main_gpu": 0,
-            "tensor_split": [1.0, 0.0],
-            "n_gpu_layers": 99,
+            "tensor_split": [0.5],
+            "n_gpu_layers": 20,
             "jinja": true,
-            "args": ""
+            "rope-scaling": "yarn",
+            "yarn-orig-ctx": 4096,
+            "cache-type-k": "f16",
+            "cache-type-v": "f16",
+            "args": "--rope-freq-base 150000.0 --rope-freq-scale 0.03125 --no-mmap"
         },
         {
             "runner": "runner2",
-            "model": "/app/models/model2.gguf",
-            "model_alias": "model2",
-            "n_ctx": 16384,
-            "n_batch": 256,
-            "n_threads": 8,
-            "chat_template": "mistral-instruct",
-            "offload_kqv": false,
+            "model": "/app/models/huihui-gpt-oss-20b-alt.gguf",
+            "model_alias": "huihui-gpt-oss-20b-alt",
+            "n_ctx": 4096,
+            "n_batch": 512,
+            "n_threads": 20,
+            "offload_kqv": true,
             "flash_attn": false,
-            "use_mlock": false,
+            "use_mlock": true,
             "main_gpu": 0,
-            "tensor_split": [1.0, 0.0],
-            "n_gpu_layers": 0,
+            "tensor_split": [0.5],
+            "n_gpu_layers": 20,
             "jinja": true,
-            "split_mode": "row",
-            "cache-type-k": "q8_0",
-            "cache-type-v": "q8_0",
-            "args": ""
+            "rope-scaling": "yarn",
+            "yarn-orig-ctx": 4096,
+            "cache-type-k": "f16",
+            "cache-type-v": "f16",
+            "args": "--rope-freq-base 150000.0 --rope-freq-scale 0.03125 --no-mmap"
         }
     ]
 }

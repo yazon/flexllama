@@ -15,7 +15,7 @@ Write-Host "================================================" -ForegroundColor C
 # Function to check if Docker is running
 function Test-Docker {
     try {
-        # Check if Docker is installed xd
+        # Check if Docker is installed
         $dockerVersion = docker --version 2>$null
         if (-not $dockerVersion) {
             Write-Host "Docker is not installed. Please install Docker first." -ForegroundColor Red
@@ -44,13 +44,13 @@ function Build-DockerImage {
     Write-Host "Building FlexLLama Docker image..." -ForegroundColor Yellow
     
     if ($GPU) {
-        Write-Host "   Building with GPU support..." -ForegroundColor Yellow
-        docker build -f Dockerfile.cuda -t flexllama-gpu:latest .
+        Write-Host "   Building with GPU support (Windows compatible)..." -ForegroundColor Yellow
+        docker build -f Dockerfile.cuda.windows -t flexllama-gpu:latest .
         $script:IMAGE_TAG = "flexllama-gpu:latest"
     }
     else {
-        Write-Host "   Building CPU-only version..." -ForegroundColor Yellow
-        docker build -t flexllama:latest .
+        Write-Host "   Building CPU-only version (Windows compatible)..." -ForegroundColor Yellow
+        docker build -f Dockerfile.windows -t flexllama:latest .
         $script:IMAGE_TAG = "flexllama:latest"
     }
     
