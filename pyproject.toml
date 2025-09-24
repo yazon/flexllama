@@ -44,9 +44,9 @@ py-modules = ["main"]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["backend*"]
+include = ["backend*", "frontend*"]
 exclude = ["tests*", "logs*", "__pycache__*"]
 
 [tool.setuptools.package-data]
 backend = ["config_example.json"]
-"*" = ["frontend/**/*"]
+frontend = ["*"]
