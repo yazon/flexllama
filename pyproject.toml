@@ -29,7 +29,8 @@ keywords = [
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.8.0",
-    "psutil>=7.0.0"
+    "check-manifest>=0.50",
+    "psutil>=7.0.0",
 ]
 
 [project.urls]
@@ -40,6 +41,7 @@ flexllama = "main:main_entry"
 
 [tool.setuptools]
 py-modules = ["main"]
+include-package-data = true
 
 [tool.setuptools.packages.find]
 include = ["backend*"]
@@ -47,4 +49,4 @@ exclude = ["tests*", "logs*", "__pycache__*"]
 
 [tool.setuptools.package-data]
 backend = ["config_example.json"]
-"*" = ["frontend/*"] 
+"*" = ["frontend/**/*"]
