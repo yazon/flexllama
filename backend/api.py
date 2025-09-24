@@ -54,8 +54,15 @@ class APIServer:
         """
         try:
             # Get frontend path from package resources (Python 3.12+)
-            return Path(importlib.resources.files("frontend"))
-        except (ImportError, FileNotFoundError, ModuleNotFoundError):
+            frontend_ref = importlib.resources.files("frontend")
+            # Convert Traversable to actual path
+            if hasattr(frontend_ref, "__fspath__"):
+                return Path(frontend_ref)
+            else:
+                # For MultiplexedPath and other Traversable objects
+                # We need to use str() to convert properly
+                return Path(str(frontend_ref))
+        except (ImportError, FileNotFoundError, ModuleNotFoundError, TypeError):
             # Fallback to relative path (development mode)
             logger.warning("Frontend package not found, falling back to relative path")
             return Path("frontend")
