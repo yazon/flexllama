@@ -5,13 +5,14 @@ This module implements OpenAI-compatible API endpoints that route requests to th
 appropriate llama.cpp server instance based on the requested model.
 """
 
-import os
 import time
 import logging
 import json
 import asyncio
 import aiohttp
 from aiohttp import web
+from pathlib import Path
+import importlib.resources
 from .runner import HealthStatus, HealthMessages
 
 # Get logger for this module
@@ -36,36 +37,67 @@ class APIServer:
         self.port = config_manager.get_api_port()
         self.health_endpoint = config_manager.get_health_endpoint()
 
+        # Get frontend directory path - try package resources first, fallback to relative path
+        self.frontend_path = self._get_frontend_path()
+
         # Set a larger client_max_size to handle image uploads (10MB should be enough)
         self.app = web.Application(client_max_size=10 * 1024 * 1024)
         self._setup_routes()
         self.runner = None
         self.site = None
 
+    def _get_frontend_path(self):
+        """Get the path to the frontend directory.
+
+        Returns:
+            Path object pointing to the frontend directory.
+        """
+        try:
+            # Get frontend path from package resources (Python 3.12+)
+            frontend_ref = importlib.resources.files("frontend")
+            # Convert Traversable to actual path
+            if hasattr(frontend_ref, "__fspath__"):
+                return Path(frontend_ref)
+            else:
+                # For MultiplexedPath and other Traversable objects
+                # We need to use str() to convert properly
+                return Path(str(frontend_ref))
+        except (ImportError, FileNotFoundError, ModuleNotFoundError, TypeError):
+            # Fallback to relative path (development mode)
+            logger.warning("Frontend package not found, falling back to relative path")
+            return Path("frontend")
+
     def _setup_routes(self):
         """Set up API routes."""
-        self.app.add_routes(
-            [
-                web.get("/v1/models", self.handle_models),
-                web.post("/v1/chat/completions", self.handle_chat_completions),
-                web.post("/v1/completions", self.handle_completions),
-                web.post("/v1/embeddings", self.handle_embeddings),
-                web.post("/v1/rerank", self.handle_rerank),
-                web.options("/{tail:.*}", self.handle_options),
-                # Runner control routes
-                web.post("/v1/runners/{runner_name}/start", self.handle_runner_start),
-                web.post("/v1/runners/{runner_name}/stop", self.handle_runner_stop),
-                web.post(
-                    "/v1/runners/{runner_name}/restart", self.handle_runner_restart
-                ),
-                web.get("/v1/runners/status", self.handle_runners_status),
-                # Dashboard routes
-                web.get("/", self.handle_dashboard),
-                web.get("/dashboard", self.handle_dashboard),
-                web.get(self.health_endpoint, self.handle_health),
-                web.static("/frontend", "frontend", show_index=True),
-            ]
-        )
+        # Only add static route if frontend path exists
+        routes = [
+            web.get("/v1/models", self.handle_models),
+            web.post("/v1/chat/completions", self.handle_chat_completions),
+            web.post("/v1/completions", self.handle_completions),
+            web.post("/v1/embeddings", self.handle_embeddings),
+            web.post("/v1/rerank", self.handle_rerank),
+            web.options("/{tail:.*}", self.handle_options),
+            # Runner control routes
+            web.post("/v1/runners/{runner_name}/start", self.handle_runner_start),
+            web.post("/v1/runners/{runner_name}/stop", self.handle_runner_stop),
+            web.post("/v1/runners/{runner_name}/restart", self.handle_runner_restart),
+            web.get("/v1/runners/status", self.handle_runners_status),
+            # Dashboard routes
+            web.get("/", self.handle_dashboard),
+            web.get("/dashboard", self.handle_dashboard),
+            web.get(self.health_endpoint, self.handle_health),
+        ]
+
+        # Add static route if frontend path exists
+        if self.frontend_path.exists() and self.frontend_path.is_dir():
+            routes.append(
+                web.static("/frontend", str(self.frontend_path), show_index=True)
+            )
+            logger.info(f"Serving static files from: {self.frontend_path}")
+        else:
+            logger.warning(f"Frontend directory not found at: {self.frontend_path}")
+
+        self.app.add_routes(routes)
 
     async def start(self):
         """Start the API server asynchronously.
@@ -140,8 +172,8 @@ class APIServer:
             The response.
         """
         try:
-            dashboard_path = os.path.join("frontend", "index.html")
-            if os.path.exists(dashboard_path):
+            dashboard_path = self.frontend_path / "index.html"
+            if dashboard_path.exists():
                 with open(dashboard_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 # Inject the health endpoint into the dashboard
@@ -149,7 +181,7 @@ class APIServer:
                 return web.Response(text=content, content_type="text/html")
             else:
                 return web.Response(
-                    text="Dashboard not found. Please ensure the frontend folder exists with index.html.",
+                    text=f"Dashboard not found at {dashboard_path}. Please ensure the frontend folder exists with index.html.",
                     status=404,
                 )
         except Exception as e:
