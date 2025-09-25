@@ -29,7 +29,6 @@ keywords = [
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.8.0",
-    "check-manifest>=0.50",
     "psutil>=7.0.0",
 ]
 
