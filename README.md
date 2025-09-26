@@ -78,7 +78,7 @@
 
 ### 🐳 Docker
 
-FlexLLama can be run using Docker and Docker Compose. We provide profiles for both CPU-only and GPU-accelerated (NVIDIA CUDA) environments. 
+FlexLLama can be run using Docker and Docker Compose. We provide profiles for both CPU-only and GPU-accelerated (NVIDIA CUDA) environments.
 
 1. **Clone the repository:**
 
@@ -89,46 +89,62 @@ FlexLLama can be run using Docker and Docker Compose. We provide profiles for bo
 
 After cloning, you can proceed with the quick start script or a manual setup.
 
----
+______________________________________________________________________
 
 #### Using the Quick Start Script (`docker-start.sh`)
 
 For an easier start, the `docker-start.sh` helper script automates several setup steps. It checks your Docker environment, builds the correct image (CPU or GPU) and provides the commands to launch FlexLLama.
 
-1.  **Make the script executable:**
-    ```bash
-    chmod +x docker-start.sh
-    ```
+1. **Make the script executable (Linux/Unix):**
 
-2.  **Run the script:**
-    Use the `--gpu` flag for NVIDIA GPU support.
+   ```bash
+   chmod +x docker-start.sh
+   ```
 
-    *For CPU-only setup:*
-    ```bash
-    ./docker-start.sh
-    ```
+1. **Run the script:**
+   Use the `--gpu` flag for NVIDIA GPU support.
 
-    *For GPU-accelerated setup:*
-    ```bash
-    ./docker-start.sh --gpu
-    ```
+   *For CPU-only setup:*
 
-3.  **Follow the on-screen instructions:**
-    The script will guide you.
+   ```bash
+   ./docker-start.sh
+   ```
 
----
+   or
+
+   ```bash
+   ./docker-start.ps1
+   ```
+
+   *For GPU-accelerated setup:*
+
+   ```bash
+   ./docker-start.sh --gpu
+   ```
+
+   or
+
+   ```bash
+   ./docker-start.ps1 -gpu
+   ```
+
+1. **Follow the on-screen instructions:**
+   The script will guide you.
+
+______________________________________________________________________
+
 **Manual Docker and Docker Compose Setup**
 
 If you prefer to run the steps manually, follow this guide:
 
-1.  **Place your models:**
+1. **Place your models:**
 
-    ```bash
-    # Create the models directory if it doesn't exist
-    mkdir -p models
-    # Copy your .gguf model files into it
-    cp /path/to/your/model.gguf models/
-    ```
+   ```bash
+   # Create the models directory if it doesn't exist
+   mkdir -p models
+   # Copy your .gguf model files into it
+   cp /path/to/your/model.gguf models/
+   ```
 
 1. **Configure your models:**
 
@@ -138,20 +154,20 @@ If you prefer to run the steps manually, follow this guide:
    #   • GPU: set "n_gpu_layers" to e.g. 99 and specify "main_gpu": 0
    ```
 
-3.  **Build and Start FlexLLama with Docker Compose (Recommended):**
-    Use the `--profile` flag to select your environment. The service will be available at `http://localhost:8080`.
+1. **Build and Start FlexLLama with Docker Compose (Recommended):**
+   Use the `--profile` flag to select your environment. The service will be available at `http://localhost:8080`.
 
-    *For CPU-only:*
+   *For CPU-only:*
 
-    ```bash
-    docker compose --profile cpu up --build -d
-    ```
+   ```bash
+   docker compose --profile cpu up --build -d
+   ```
 
-    *For GPU support (NVIDIA CUDA):*
+   *For GPU support (NVIDIA CUDA):*
 
-    ```bash
-    docker compose --profile gpu up --build -d
-    ```
+   ```bash
+   docker compose --profile gpu up --build -d
+   ```
 
 1. **View Logs**
    To monitor the output of your services, you can view their logs in real-time.
@@ -197,8 +213,8 @@ If you prefer to run the steps manually, follow this guide:
      flexllama-gpu:latest
    ```
 
-5.  **Open the dashboard:**
-    Access the FlexLLama dashboard in your browser: `http://localhost:8080`
+1. **Open the dashboard:**
+   Access the FlexLLama dashboard in your browser: `http://localhost:8080`
 
 ## Configuration
 
@@ -329,6 +345,7 @@ To validate your `config.json` file, run `config.py` and provide the path to you
 ```bash
 python backend/config.py config.json
 ```
+
 A successful validation will print a confirmation message. If there are errors, they will be displayed with details on how to fix them.
 
 ### Running Tests
@@ -336,6 +353,7 @@ A successful validation will print a confirmation message. If there are errors, 
 The `tests/` directory contains scripts for different testing purposes. All test scripts generate detailed logs in the `tests/logs/{session_id}/` directory.
 
 **Prerequisites:**
+
 - For `test_basic.py` and `test_all_models.py`, the main application must be running (`flexllama config.json`).
 - For `test_model_switching.py`, the main application should **not** be running.
 
@@ -349,6 +367,7 @@ python tests/test_basic.py
 ```
 
 **What it tests:**
+
 - `/v1/models` and `/health` endpoints
 - `/v1/chat/completions` with both regular and streaming responses
 - Concurrent request handling
@@ -363,6 +382,7 @@ python tests/test_all_models.py config.json
 ```
 
 **What it tests:**
+
 - Model loading and health checks
 - Chat completions (regular and streaming) for each model
 - Response time and error handling
@@ -377,6 +397,7 @@ python tests/test_model_switching.py config.json
 ```
 
 **What it tests:**
+
 - Dynamic model loading and switching
 - Runner state management and health monitoring
 - Proper cleanup of resources
@@ -385,6 +406,6 @@ python tests/test_model_switching.py config.json
 
 This project is licensed under the BSD-3-Clause License. See the `LICENSE` file for details.
 
----
+______________________________________________________________________
 
 **🚀 Ready to run multiple LLMs like a pro? Edit your `config.json` and start FlexLLama!**
