@@ -552,10 +552,10 @@ class RunnerProcess:
                 f"Command building: After pooling, {len(cmd)} items: {cmd[-2:]}"
             )
 
-        if model_config.get("flash_attn", False):
-            cmd.append("--flash-attn")
+        if "flash_attn" in model_config:
+            cmd.extend(["--flash-attn", model_config["flash_attn"]])
             logger.debug(
-                f"Command building: After flash_attn, {len(cmd)} items: {cmd[-1:]}"
+                f"Command building: After flash_attn, {len(cmd)} items: {cmd[-2:]}"
             )
 
         if model_config.get("use_mlock", False):

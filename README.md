@@ -316,7 +316,7 @@ Edit `config.json` to configure your runners and models:
 
 *Optimization:*
 
-- `flash_attn`: Enable flash attention for faster processing (`true`/`false`)
+- `flash_attn`: Flash attention mode - `"on"`, `"off"`, or `"auto"` (case-sensitive). Boolean values (`true`/`false`) are deprecated but still supported for backwards compatibility.
 - `split_mode`: How to split model layers ("row" or other modes)
 - `cache-type-k`: Key cache quantization type (e.g., "q8_0")
 - `cache-type-v`: Value cache quantization type (e.g., "q8_0")

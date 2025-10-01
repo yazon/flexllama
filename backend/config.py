@@ -250,7 +250,6 @@ class ConfigManager:
 
         bool_fields = [
             "offload_kqv",
-            "flash_attn",
             "use_mlock",
             "jinja",
             "embedding",
@@ -259,6 +258,27 @@ class ConfigManager:
         for field in bool_fields:
             if field in model and not isinstance(model[field], bool):
                 raise ValueError(f"Model {index}: {field} must be a boolean")
+
+        # Validate and normalize flash_attn (supports both boolean and string values)
+        if "flash_attn" in model:
+            flash_attn_value = model["flash_attn"]
+            if isinstance(flash_attn_value, bool):
+                # Deprecated: boolean values for flash_attn
+                logger.warning(
+                    f"Model {index}: Using boolean values for 'flash_attn' is deprecated. "
+                    f"Please use 'on', 'off', or 'auto' instead. "
+                    f"Converting {flash_attn_value} to '{'on' if flash_attn_value else 'off'}'."
+                )
+                model["flash_attn"] = "on" if flash_attn_value else "off"
+            elif isinstance(flash_attn_value, str):
+                if flash_attn_value not in ["on", "off", "auto"]:
+                    raise ValueError(
+                        f"Model {index}: flash_attn must be 'on', 'off', or 'auto' (case-sensitive)"
+                    )
+            else:
+                raise ValueError(
+                    f"Model {index}: flash_attn must be a boolean or string ('on', 'off', 'auto')"
+                )
 
         if "tensor_split" in model:
             if not isinstance(model["tensor_split"], list):
