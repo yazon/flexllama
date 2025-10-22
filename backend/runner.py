@@ -249,8 +249,27 @@ class RunnerProcess:
         self.start_time = time.time()
 
         try:
-            # Build command
-            cmd = self._build_command(model_config)
+            # Build command and parse environment variables
+            cmd, env_from_path = self._build_command_and_env(model_config)
+
+            # Compose the environment for the subprocess
+            env_for_child = self._compose_environment(model_config, env_from_path)
+
+            # Log deprecation warning if inline env vars were found in path
+            if env_from_path:
+                logger.warning(
+                    f"Runner {self.runner_name}: inline env assignments in 'path' are deprecated; "
+                    f"please use runner.env/model.env. Parsed vars: {', '.join(sorted(env_from_path.keys()))}"
+                )
+
+            # Log applied environment variables (names only, not values for security)
+            runner_env_vars = list(self.runner_config.get("env", {}).keys())
+            model_env_vars = list(model_config.get("env", {}).keys())
+            all_env_vars = runner_env_vars + model_env_vars + list(env_from_path.keys())
+            if all_env_vars:
+                logger.info(
+                    f"Runner {self.runner_name}: applying env vars {', '.join(sorted(set(all_env_vars)))}"
+                )
 
             # Use session log directory
             log_dir = self.session_log_dir
@@ -284,6 +303,7 @@ class RunnerProcess:
                     "stderr": self.output_file,
                     "text": True,
                     "bufsize": 1,
+                    "env": env_for_child,
                 }
                 if os.name == "posix":
                     popen_kwargs["start_new_session"] = True
@@ -458,17 +478,121 @@ class RunnerProcess:
 
         return True
 
-    def _build_command(self, model_config):
-        """Build the command to start the runner process.
+    def _parse_runner_path_with_env(
+        self, raw_path: str
+    ) -> tuple[str, list[str], dict[str, str]]:
+        """Parse runner 'path' that may contain leading environment assignments or an 'env' wrapper.
+
+        Args:
+            raw_path: The raw path string from runner configuration.
+
+        Returns:
+            A tuple of (executable_path, additional_args, env_from_path).
+        """
+        try:
+            tokens = shlex.split(raw_path)
+        except ValueError as e:
+            logger.warning(
+                f"Runner {self.runner_name}: Failed to parse path '{raw_path}': {e}. "
+                "Using simple split as fallback."
+            )
+            tokens = raw_path.split()
+
+        env_from_path: dict[str, str] = {}
+        if not tokens:
+            return raw_path, [], env_from_path
+
+        index = 0
+        # Handle 'env' command prefix
+        if tokens[0] == "env":
+            index = 1
+
+        # Collect NAME=VALUE assignments
+        while (
+            index < len(tokens)
+            and "=" in tokens[index]
+            and not tokens[index].startswith("--")
+        ):
+            try:
+                name, value = tokens[index].split("=", 1)
+                env_from_path[name] = value
+                index += 1
+            except ValueError:
+                # Malformed assignment, stop parsing env vars
+                break
+
+        if index >= len(tokens):
+            # No executable token found; treat the entire string as a path
+            return raw_path, [], env_from_path
+
+        executable = tokens[index]
+        index += 1
+        initial_args = tokens[index:] if index < len(tokens) else []
+        return executable, initial_args, env_from_path
+
+    def _compose_environment(
+        self, model_config: dict, env_from_path: dict[str, str]
+    ) -> dict[str, str]:
+        """Build the environment for the subprocess, honoring inherit_env and overrides.
+
+        Precedence (last wins):
+          1) base env (os.environ) if inherit_env is true, else {}
+          2) runner_config["env"]
+          3) model_config["env"]
+          4) env_from_path (parsed from runner.path; kept for backward-compat)
+
+        Args:
+            model_config: The model configuration.
+            env_from_path: Environment variables parsed from runner path.
+
+        Returns:
+            The composed environment dictionary.
+        """
+        # Resolve inherit_env with model override
+        inherit = self.runner_config.get("inherit_env", True)
+        if "inherit_env" in model_config:
+            try:
+                inherit = bool(model_config["inherit_env"])
+            except Exception:
+                inherit = True
+
+        base_env = os.environ.copy() if inherit else {}
+        merged: dict[str, str] = dict(base_env)
+
+        # Apply environment variables in precedence order
+        for mapping in (
+            self.runner_config.get("env", {}),
+            model_config.get("env", {}),
+            env_from_path,
+        ):
+            if not isinstance(mapping, dict):
+                continue
+            for key, value in mapping.items():
+                merged[str(key)] = str(value)
+
+        return merged
+
+    def _build_command_and_env(
+        self, model_config: dict
+    ) -> tuple[list[str], dict[str, str]]:
+        """Build the command to start the runner process and collect any env from runner.path.
 
         Args:
             model_config: Configuration for the model.
 
         Returns:
-            The command as a list of strings.
+            A tuple of (command_list, env_from_path).
         """
-        # Start with runner path
-        cmd = [self.runner_config["path"]]
+        # Parse runner path for environment variables and executable
+        executable, initial_args, env_from_path = self._parse_runner_path_with_env(
+            self.runner_config["path"]
+        )
+
+        # Start with executable and any initial args from path
+        cmd: list[str] = [executable]
+        if initial_args:
+            cmd.extend(initial_args)
+
         logger.debug(
             f"Command building for {self.runner_name}: Starting with {len(cmd)} items"
         )
@@ -647,6 +771,18 @@ class RunnerProcess:
         # Add extra arguments
         cmd.extend(self.runner_config.get("extra_args", []))
 
+        return cmd, env_from_path
+
+    def _build_command(self, model_config):
+        """Build the command to start the runner process.
+
+        Args:
+            model_config: Configuration for the model.
+
+        Returns:
+            The command as a list of strings.
+        """
+        cmd, _ = self._build_command_and_env(model_config)
         return cmd
 
     async def _is_server_ready(self):

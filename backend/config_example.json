@@ -16,6 +16,11 @@
         "path": "/path/to/llama-server",
         "host": "127.0.0.1",
         "port": 8085,
+        "inherit_env": true,
+        "env": {
+            "MY_VAR": "1",
+            "RUNNER_SPECIFIC_VAR": "value"
+        },
         "extra_args": ["--verbose"]
     },
     "runner2": {
@@ -23,6 +28,8 @@
         "path": "/path/to/llama-server",
         "host": "127.0.0.1",
         "port": 8086,
+        "inherit_env": true,
+        "env": {},
         "extra_args": []
     },
     "models": [
@@ -40,6 +47,10 @@
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 99,
             "jinja": true,
+            "env": {
+                "GGML_VULKAN_DEVICE": "0",
+                "MODEL_SPECIFIC_VAR": "example"
+            },
             "args": ""
         },
         {
@@ -66,7 +77,7 @@
             "runner": "runner2",
             "model": "/path/to/model3.gguf",
             "model_alias": "model3",
-            "args": "--ctx-size 8000 --batch-size 512 --threads 8 --flash-attn on --mlock"
+            "args": "--ctx-size 8000 --batch-size 512 --threads 8 --flash-attn on --mlock --device Vulkan1"
         },
         {
             "runner": "runner1",

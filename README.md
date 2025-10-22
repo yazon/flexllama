@@ -234,7 +234,9 @@ Edit `config.json` to configure your runners and models:
         "type": "llama-server",
         "path": "/path/to/llama-server",
         "host": "127.0.0.1",
-        "port": 8085
+        "port": 8085,
+        "inherit_env": true,
+        "env": {}
     },
     "models": [
         {
@@ -255,11 +257,15 @@ Edit `config.json` to configure your runners and models:
 {
     "runner_gpu0": {
         "path": "/path/to/llama-server",
-        "port": 8085
+        "port": 8085,
+        "inherit_env": true,
+        "env": {}
     },
     "runner_gpu1": {
         "path": "/path/to/llama-server", 
-        "port": 8086
+        "port": 8086,
+        "inherit_env": true,
+        "env": {}
     },
     "models": [
         {
@@ -281,12 +287,43 @@ Edit `config.json` to configure your runners and models:
 }
 ```
 
+### Environment Variables
+
+FlexLLama supports setting environment variables for runners and individual models. This is useful for configuring GPU devices, library paths, or other runtime settings.
+
+```json
+{
+    "runner_vulkan": {
+        "type": "llama-server",
+        "path": "/path/to/llama-server",
+        "port": 8085,
+        "inherit_env": true,
+        "env": {
+            "GGML_VULKAN_DEVICE": "1",
+            "RUNNER_SPECIFIC_VAR": "value"
+        }
+    },
+    "models": [
+        {
+            "runner": "runner_vulkan",
+            "model": "/path/to/model.gguf",
+            "model_alias": "my-model",
+            "env": {
+                "MODEL_SPECIFIC_VAR": "override"
+            }
+        }
+    ]
+}
+```
+
 ### Key Configuration Options
 
 **Runner Options:**
 
 - `path`: Path to llama-server binary
 - `host`/`port`: Where to run this instance
+- `inherit_env`: Whether to inherit parent environment variables (default: `true`)
+- `env`: Dictionary of environment variables to set for all models on this runner
 - `extra_args`: Additional arguments for llama-server (applied to all models using this runner)
 
 **Model Options:**
@@ -296,6 +333,8 @@ Edit `config.json` to configure your runners and models:
 - `runner`: Which runner to use for this model
 - `model`: Path to .gguf model file
 - `model_alias`: Name to use in API calls
+- `inherit_env`: Override runner's inherit_env setting for this model (optional)
+- `env`: Dictionary of environment variables specific to this model (overrides runner env)
 
 *Model Types:*
 

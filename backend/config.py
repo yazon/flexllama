@@ -289,6 +289,22 @@ class ConfigManager:
                         f"Model {index}: tensor_split values must be numbers"
                     )
 
+        # Validate env field
+        if "env" in model:
+            if not isinstance(model["env"], dict):
+                raise ValueError(
+                    f"Model {index}: env must be a dictionary of string to string"
+                )
+            for k, v in model["env"].items():
+                if not isinstance(k, str) or not isinstance(v, str):
+                    raise ValueError(
+                        f"Model {index}: env keys and values must be strings"
+                    )
+
+        # Validate inherit_env field
+        if "inherit_env" in model and not isinstance(model["inherit_env"], bool):
+            raise ValueError(f"Model {index}: inherit_env must be a boolean")
+
     def _validate_runner_config(self, runner, runner_name: str, used_ports: set):
         """Validate the runner configuration.
 
@@ -340,6 +356,22 @@ class ConfigManager:
                     raise ValueError(
                         f"Runner {runner_name}: extra_args must contain only strings"
                     )
+
+        # Check env
+        if "env" in runner:
+            if not isinstance(runner["env"], dict):
+                raise ValueError(
+                    f"Runner {runner_name}: env must be a dictionary of string to string"
+                )
+            for k, v in runner["env"].items():
+                if not isinstance(k, str) or not isinstance(v, str):
+                    raise ValueError(
+                        f"Runner {runner_name}: env keys and values must be strings"
+                    )
+
+        # Check inherit_env
+        if "inherit_env" in runner and not isinstance(runner["inherit_env"], bool):
+            raise ValueError(f"Runner {runner_name}: inherit_env must be a boolean")
 
     def get_config(self):
         """Get the full configuration.
