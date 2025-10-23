@@ -72,6 +72,14 @@ class RunnerProcess:
         self.is_starting = False
         self.start_time = None
 
+        # Auto-unload state tracking
+        self.auto_unload_timeout_seconds = runner_config.get(
+            "auto_unload_timeout_seconds", 0
+        )
+        self.active_requests = 0
+        self.last_activity_ts = None
+        self._request_lock = asyncio.Lock()
+
     def _kill_process_tree(self, pid: int):
         """Terminate a process and all of its children, using an OS-specific method."""
         if os.name == "nt":
@@ -346,6 +354,9 @@ class RunnerProcess:
                         f"Runner {self.runner_name} started successfully with model {model_alias}"
                     )
                     self.current_model = model_config
+                    # Initialize auto-unload tracking
+                    self.last_activity_ts = time.time()
+                    self.active_requests = 0
                     self.is_starting = False
                     return True
 
@@ -427,6 +438,10 @@ class RunnerProcess:
             self.process = None
             self.current_model = None  # Reset current model
 
+            # Reset auto-unload state
+            self.last_activity_ts = None
+            self.active_requests = 0
+
             # Wait to offload GPU memory
             await asyncio.sleep(0.5)
 
@@ -443,6 +458,9 @@ class RunnerProcess:
                 self.output_file = None
             self.process = None
             self.current_model = None
+            # Reset auto-unload state
+            self.last_activity_ts = None
+            self.active_requests = 0
             return False
 
     async def is_running(self):
@@ -825,6 +843,11 @@ class RunnerManager:
         self.runners = {}  # Map of runner name to RunnerProcess
         self.model_runner_map = {}  # Map of model alias to runner name
         self.timeout = 300  # 5 minutes
+
+        # Auto-unload watchdog
+        self._auto_unload_task = None
+        self._watchdog_running = False
+
         self._initialize_runners()
 
     def _initialize_runners(self):
@@ -951,6 +974,62 @@ class RunnerManager:
             logger.info("No runners were auto-started (no models assigned)")
 
         return success
+
+    async def start_auto_unload_watchdog(self) -> None:
+        """Start the auto-unload watchdog task."""
+        if self._auto_unload_task is None:
+            logger.info("Starting auto-unload watchdog")
+            self._watchdog_running = True
+            self._auto_unload_task = asyncio.create_task(self._auto_unload_loop())
+
+    async def stop_auto_unload_watchdog(self) -> None:
+        """Stop the auto-unload watchdog task."""
+        if self._auto_unload_task:
+            logger.info("Stopping auto-unload watchdog")
+            self._watchdog_running = False
+            self._auto_unload_task.cancel()
+            try:
+                await self._auto_unload_task
+            except asyncio.CancelledError:
+                pass
+            self._auto_unload_task = None
+
+    async def _auto_unload_loop(self) -> None:
+        """Auto-unload watchdog loop that checks for idle runners."""
+        while self._watchdog_running:
+            try:
+                await asyncio.sleep(1)  # Check every second
+                current_time = time.time()
+
+                for runner_name, runner in self.runners.items():
+                    if (
+                        runner.auto_unload_timeout_seconds > 0
+                        and await runner.is_running()
+                        and runner.current_model is not None
+                        and not runner.is_starting
+                        and runner.last_activity_ts is not None
+                    ):
+                        # Use lock to prevent race with request start/end
+                        async with runner._request_lock:
+                            if (
+                                runner.active_requests == 0
+                                and (current_time - runner.last_activity_ts)
+                                >= runner.auto_unload_timeout_seconds
+                            ):
+                                current_alias = runner.current_model.get(
+                                    "model_alias",
+                                    os.path.basename(runner.current_model["model"]),
+                                )
+                                logger.info(
+                                    f"Auto-unload triggered for runner {runner_name} "
+                                    f"(model: {current_alias}) after {runner.auto_unload_timeout_seconds}s idle"
+                                )
+                                await runner.stop()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in auto-unload watchdog: {e}")
 
     async def is_runner_running(self, runner_name):
         """Check if a runner process is running.

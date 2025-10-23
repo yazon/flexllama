@@ -18,6 +18,7 @@
         "port": 8085,
         "inherit_env": true,
         "env": {},
+        "auto_unload_timeout_seconds": 300,
         "extra_args": ["--verbose"]
     },
     "runner2": {
@@ -27,6 +28,7 @@
         "port": 8086,
         "inherit_env": true,
         "env": {},
+        "auto_unload_timeout_seconds": 0,
         "extra_args": []
     },
     "models": [

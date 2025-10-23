@@ -373,6 +373,18 @@ class ConfigManager:
         if "inherit_env" in runner and not isinstance(runner["inherit_env"], bool):
             raise ValueError(f"Runner {runner_name}: inherit_env must be a boolean")
 
+        # Check auto_unload_timeout_seconds
+        if "auto_unload_timeout_seconds" not in runner:
+            runner["auto_unload_timeout_seconds"] = 0
+        elif not isinstance(runner["auto_unload_timeout_seconds"], int):
+            raise ValueError(
+                f"Runner {runner_name}: auto_unload_timeout_seconds must be an integer"
+            )
+        elif runner["auto_unload_timeout_seconds"] < 0:
+            raise ValueError(
+                f"Runner {runner_name}: auto_unload_timeout_seconds must be non-negative"
+            )
+
     def get_config(self):
         """Get the full configuration.
 

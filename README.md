@@ -28,6 +28,8 @@
 
 ## Quickstart
 
+> **🚀 Want to get started in 5 minutes?** Check out our [**QUICKSTART.md**](QUICKSTART.md) for a simple Docker setup with the Qwen3-4B model!
+
 ### 📦 Local Installation
 
 1. **Install FlexLLama:**
@@ -287,6 +289,45 @@ Edit `config.json` to configure your runners and models:
 }
 ```
 
+### Auto-unload Configuration
+
+FlexLLama supports automatic model unloading to free up RAM when models are idle. This is useful for managing memory usage when running multiple models.
+
+```json
+{
+    "runner_memory_saver": {
+        "path": "/path/to/llama-server",
+        "port": 8085,
+        "auto_unload_timeout_seconds": 300
+    },
+    "runner_always_on": {
+        "path": "/path/to/llama-server",
+        "port": 8086,
+        "auto_unload_timeout_seconds": 0
+    },
+    "models": [
+        {
+            "runner": "runner_memory_saver",
+            "model": "/path/to/large-model.gguf",
+            "model_alias": "large-model"
+        },
+        {
+            "runner": "runner_always_on",
+            "model": "/path/to/small-model.gguf",
+            "model_alias": "small-model"
+        }
+    ]
+}
+```
+
+**Auto-unload Behavior:**
+- `auto_unload_timeout_seconds: 0` - Disables auto-unload (default)
+- `auto_unload_timeout_seconds: 300` - Unloads model after 5 minutes of inactivity
+- Models are considered "active" while processing requests (including streaming)
+- The timeout is measured from the last request completion
+- Auto-unload frees RAM by stopping the runner process entirely
+- Models will be automatically reloaded when the next request arrives
+
 ### Environment Variables
 
 FlexLLama supports setting environment variables for runners and individual models. This is useful for configuring GPU devices, library paths, or other runtime settings.
@@ -325,6 +366,7 @@ FlexLLama supports setting environment variables for runners and individual mode
 - `inherit_env`: Whether to inherit parent environment variables (default: `true`)
 - `env`: Dictionary of environment variables to set for all models on this runner
 - `extra_args`: Additional arguments for llama-server (applied to all models using this runner)
+- `auto_unload_timeout_seconds`: Automatically unload model after this many seconds of inactivity (0 disables, default: 0)
 
 **Model Options:**
 

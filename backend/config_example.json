@@ -21,7 +21,8 @@
             "MY_VAR": "1",
             "RUNNER_SPECIFIC_VAR": "value"
         },
-        "extra_args": ["--verbose"]
+        "extra_args": ["--verbose"],
+        "auto_unload_timeout_seconds": 300
     },
     "runner2": {
         "type": "llama-server",
@@ -30,7 +31,8 @@
         "port": 8086,
         "inherit_env": true,
         "env": {},
-        "extra_args": []
+        "extra_args": [],
+        "auto_unload_timeout_seconds": 0
     },
     "models": [
         {
