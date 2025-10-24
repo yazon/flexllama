@@ -48,4 +48,4 @@ exclude = ["tests*", "logs*", "__pycache__*"]
 
 [tool.setuptools.package-data]
 frontend = ["*"]
-"" = ["config_example.json"]
+"*" = ["config_example.json"]
