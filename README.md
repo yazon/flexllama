@@ -52,7 +52,7 @@
    Copy the example configuration file to create your own. If you installed from a local clone, you can run:
 
    ```bash
-   cp backend/config_example.json config.json
+   cp config_example.json config.json
    ```
 
    If you installed from git, you may need to download it from the repository.
