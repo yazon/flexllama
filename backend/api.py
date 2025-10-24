@@ -859,8 +859,10 @@ class APIServer:
             logger.debug(
                 f"Forwarding non-streaming request to model {model_alias} at {endpoint}"
             )
+            request_start_notified = False
             try:
                 await self._notify_request_start(model_alias)
+                request_start_notified = True
                 (
                     success,
                     response_data,
@@ -870,7 +872,8 @@ class APIServer:
                 )
                 return web.json_response(response_data, status=status_code)
             finally:
-                await self._notify_request_end(model_alias)
+                if request_start_notified:
+                    await self._notify_request_end(model_alias)
 
     async def _forward_streaming_request(self, request, model_alias, endpoint, data):
         """Forward a streaming request to the appropriate runner.
@@ -916,8 +919,10 @@ class APIServer:
         url = f"http://{runner.host}:{runner.port}{endpoint}"
 
         # Forward streaming request
+        request_start_notified = False
         try:
             await self._notify_request_start(model_alias)
+            request_start_notified = True
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=data) as response:
                     # Check if this is an error response
@@ -969,7 +974,8 @@ class APIServer:
                 status=500,
             )
         finally:
-            await self._notify_request_end(model_alias)
+            if request_start_notified:
+                await self._notify_request_end(model_alias)
 
 
 async def main():
