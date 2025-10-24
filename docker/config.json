@@ -16,6 +16,9 @@
         "path": "/usr/local/bin/llama-server",
         "host": "127.0.0.1",
         "port": 8085,
+        "inherit_env": true,
+        "env": {},
+        "auto_unload_timeout_seconds": 300,
         "extra_args": ["--verbose"]
     },
     "runner2": {
@@ -23,6 +26,9 @@
         "path": "/usr/local/bin/llama-server",
         "host": "127.0.0.1",
         "port": 8086,
+        "inherit_env": true,
+        "env": {},
+        "auto_unload_timeout_seconds": 0,
         "extra_args": []
     },
     "models": [
@@ -40,7 +46,7 @@
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 99,
             "jinja": true,
-            "args": ""
+            "args": "--device Vulkan0"
         },
         {
             "runner": "runner2",

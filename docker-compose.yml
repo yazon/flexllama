@@ -7,13 +7,12 @@ services:
     restart: unless-stopped
     profiles: ["cpu"]
     ports:
-      - "8080:8080"  # FlexLLama API and dashboard
+      - "8090:8080"  # FlexLLama API and dashboard
       - "8085:8085"  # Runner 1
       - "8086:8086"  # Runner 2
       - "8087:8087"  # Runner 3 (optional)
       - "8088:8088"  # Runner 4 (optional)
       - "8089:8089"  # Runner 5 (optional)
-      - "8090:8090"  # Runner 6 (optional)
     volumes:
       - ./docker/config.json:/app/config.json:ro  # Configuration file
       - ./models:/app/models:ro                   # Model files directory
@@ -38,13 +37,12 @@ services:
     restart: unless-stopped
     profiles: ["gpu"]
     ports:
-      - "8080:8080"  # FlexLLama API and dashboard
+      - "8090:8080"  # FlexLLama API and dashboard
       - "8085:8085"  # Runner 1
       - "8086:8086"  # Runner 2
       - "8087:8087"  # Runner 3 (optional)
       - "8088:8088"  # Runner 4 (optional)
       - "8089:8089"  # Runner 5 (optional)
-      - "8090:8090"  # Runner 6 (optional)
     volumes:
       - ./docker/config.json:/app/config.json:ro
       - ./models:/app/models:ro

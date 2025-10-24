@@ -113,6 +113,9 @@ class APIServer:
             self.site = web.TCPSite(self.runner, self.host, self.port)
             await self.site.start()
 
+            # Start auto-unload watchdog
+            await self.runner_manager.start_auto_unload_watchdog()
+
             logger.info("API server started successfully")
             return True
 
@@ -127,6 +130,9 @@ class APIServer:
             An awaitable that resolves to True if the server was stopped successfully, False otherwise.
         """
         try:
+            # Stop auto-unload watchdog first
+            await self.runner_manager.stop_auto_unload_watchdog()
+
             if self.runner:
                 logger.info("Stopping API server")
                 await self.runner.cleanup()
@@ -145,6 +151,36 @@ class APIServer:
             The URL of the API server.
         """
         return f"http://{self.host}:{self.port}"
+
+    async def _notify_request_start(self, model_alias: str) -> None:
+        """Notify that a request has started for a model.
+
+        Args:
+            model_alias: The alias of the model handling the request.
+        """
+        runner = self.runner_manager.get_runner_for_model(model_alias)
+        if runner:
+            async with runner._request_lock:
+                runner.active_requests += 1
+                runner.last_activity_ts = time.time()
+                logger.debug(
+                    f"Request started for model {model_alias}, active requests: {runner.active_requests}"
+                )
+
+    async def _notify_request_end(self, model_alias: str) -> None:
+        """Notify that a request has ended for a model.
+
+        Args:
+            model_alias: The alias of the model that handled the request.
+        """
+        runner = self.runner_manager.get_runner_for_model(model_alias)
+        if runner:
+            async with runner._request_lock:
+                runner.active_requests = max(0, runner.active_requests - 1)
+                runner.last_activity_ts = time.time()
+                logger.debug(
+                    f"Request ended for model {model_alias}, active requests: {runner.active_requests}"
+                )
 
     async def handle_options(self, request):
         """Handle OPTIONS requests for CORS.
@@ -348,11 +384,25 @@ class APIServer:
             # Get runner info including host and port
             runner = self.runner_manager.runners.get(runner_name)
             if runner:
+                # Calculate auto-unload countdown
+                auto_unload_countdown = None
+                if (
+                    runner.auto_unload_timeout_seconds > 0
+                    and runner.current_model is not None
+                    and runner.last_activity_ts is not None
+                    and runner.active_requests == 0
+                ):
+                    elapsed = time.time() - runner.last_activity_ts
+                    remaining = runner.auto_unload_timeout_seconds - elapsed
+                    auto_unload_countdown = max(0, int(remaining))
+
                 runner_info[runner_name] = {
                     "host": runner.host,
                     "port": runner.port,
                     "current_model": current_model,
                     "is_active": active_runners.get(runner_name, False),
+                    "auto_unload_timeout_seconds": runner.auto_unload_timeout_seconds,
+                    "auto_unload_countdown_seconds": auto_unload_countdown,
                 }
 
         response = {
@@ -809,12 +859,21 @@ class APIServer:
             logger.debug(
                 f"Forwarding non-streaming request to model {model_alias} at {endpoint}"
             )
-            (
-                success,
-                response_data,
-                status_code,
-            ) = await self.runner_manager.forward_request(model_alias, endpoint, data)
-            return web.json_response(response_data, status=status_code)
+            request_start_notified = False
+            try:
+                await self._notify_request_start(model_alias)
+                request_start_notified = True
+                (
+                    success,
+                    response_data,
+                    status_code,
+                ) = await self.runner_manager.forward_request(
+                    model_alias, endpoint, data
+                )
+                return web.json_response(response_data, status=status_code)
+            finally:
+                if request_start_notified:
+                    await self._notify_request_end(model_alias)
 
     async def _forward_streaming_request(self, request, model_alias, endpoint, data):
         """Forward a streaming request to the appropriate runner.
@@ -860,7 +919,10 @@ class APIServer:
         url = f"http://{runner.host}:{runner.port}{endpoint}"
 
         # Forward streaming request
+        request_start_notified = False
         try:
+            await self._notify_request_start(model_alias)
+            request_start_notified = True
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=data) as response:
                     # Check if this is an error response
@@ -911,6 +973,9 @@ class APIServer:
                 {"error": {"message": f"Error forwarding streaming request: {str(e)}"}},
                 status=500,
             )
+        finally:
+            if request_start_notified:
+                await self._notify_request_end(model_alias)
 
 
 async def main():
