@@ -354,7 +354,7 @@ class RunnerProcess:
                         f"Runner {self.runner_name} started successfully with model {model_alias}"
                     )
                     self.current_model = model_config
-                    self.last_activity_ts = None
+                    self.last_activity_ts = time.time()
                     self.active_requests = 0
                     self.is_starting = False
                     return True
