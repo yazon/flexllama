@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flexllama"
-version = "0.1.4"
+version = "0.1.6"
 description = "A lightweight Python tool that easily runs multiple llama.cpp server instances with OpenAI v1 API compatibility"
 readme = "README.md"
 license = {text = "BSD-3-Clause"}

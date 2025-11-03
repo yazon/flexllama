@@ -42,6 +42,10 @@ class APIServer:
 
         # Set a larger client_max_size to handle image uploads (10MB should be enough)
         self.app = web.Application(client_max_size=10 * 1024 * 1024)
+
+        # Set keepalive timeout to 60 minutes for long-running requests
+        self.keepalive_timeout = 3600  # 60 minutes
+
         self._setup_routes()
         self.runner = None
         self.site = None
@@ -107,8 +111,11 @@ class APIServer:
         """
         try:
             logger.info(f"Starting API server on {self.host}:{self.port}")
+            logger.info(f"Keepalive timeout set to {self.keepalive_timeout} seconds")
 
-            self.runner = web.AppRunner(self.app)
+            self.runner = web.AppRunner(
+                self.app, keepalive_timeout=self.keepalive_timeout
+            )
             await self.runner.setup()
             self.site = web.TCPSite(self.runner, self.host, self.port)
             await self.site.start()
@@ -920,11 +927,32 @@ class APIServer:
 
         # Forward streaming request
         request_start_notified = False
+
+        # keepalive check timeout
+        keepalive_check_timeout = 10
+
         try:
             await self._notify_request_start(model_alias)
             request_start_notified = True
+
+            # Get streaming timeout configuration
+            streaming_timeout = self.config_manager.get_streaming_timeout_seconds()
+            if streaming_timeout == 0:
+                timeout_config = aiohttp.ClientTimeout(
+                    total=None, sock_connect=None, sock_read=None
+                )
+            else:
+                # Use the same value for total and sock_read to avoid premature read timeouts
+                timeout_config = aiohttp.ClientTimeout(
+                    total=streaming_timeout,
+                    sock_connect=streaming_timeout,
+                    sock_read=streaming_timeout,
+                )
+
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=data) as response:
+                async with session.post(
+                    url, json=data, timeout=timeout_config
+                ) as response:
                     # Check if this is an error response
                     if response.status != 200:
                         try:
@@ -952,9 +980,46 @@ class APIServer:
                     )
                     await streaming_response.prepare(request)
 
+                    # Track last activity to avoid sending keepalive during active streaming
+                    last_activity = time.time()
+                    keepalive_stop = asyncio.Event()
+
+                    # Start SSE keepalive pings to avoid client inactivity timeouts
+                    async def _keepalive():
+                        try:
+                            while not keepalive_stop.is_set():
+                                await asyncio.sleep(
+                                    keepalive_check_timeout
+                                )  # Check every keepalive_check_timeout seconds
+                                if keepalive_stop.is_set():
+                                    break
+
+                                # Only send keepalive if no data sent in last keepalive_check_timeout seconds
+                                if (
+                                    time.time() - last_activity
+                                    > keepalive_check_timeout
+                                ):
+                                    try:
+                                        # SSE comment - standard keepalive that clients ignore
+                                        await streaming_response.write(b":\n\n")
+                                    except Exception:
+                                        break
+                        except asyncio.CancelledError:
+                            pass
+
+                    keepalive_task = asyncio.create_task(_keepalive())
+
                     # Stream the response data
-                    async for chunk in response.content.iter_chunked(8192):
-                        await streaming_response.write(chunk)
+                    try:
+                        async for chunk in response.content.iter_chunked(8192):
+                            await streaming_response.write(chunk)
+                            last_activity = time.time()
+                    finally:
+                        keepalive_stop.set()
+                        try:
+                            keepalive_task.cancel()
+                        except Exception:
+                            pass
 
                     await streaming_response.write_eof()
                     return streaming_response

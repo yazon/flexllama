@@ -354,8 +354,7 @@ class RunnerProcess:
                         f"Runner {self.runner_name} started successfully with model {model_alias}"
                     )
                     self.current_model = model_config
-                    # Initialize auto-unload tracking
-                    self.last_activity_ts = time.time()
+                    self.last_activity_ts = None
                     self.active_requests = 0
                     self.is_starting = False
                     return True
@@ -644,6 +643,12 @@ class RunnerProcess:
                 f"Command building: After n_batch, {len(cmd)} items: {cmd[-2:]}"
             )
 
+        if "u_batch" in model_config:
+            cmd.extend(["--ubatch-size", str(model_config["u_batch"])])
+            logger.debug(
+                f"Command building: After u_batch, {len(cmd)} items: {cmd[-2:]}"
+            )
+
         if "n_threads" in model_config:
             cmd.extend(["--threads", str(model_config["n_threads"])])
             logger.debug(
@@ -842,7 +847,9 @@ class RunnerManager:
         self.session_log_dir = session_log_dir or "logs"
         self.runners = {}  # Map of runner name to RunnerProcess
         self.model_runner_map = {}  # Map of model alias to runner name
-        self.timeout = 300  # 5 minutes
+        self.timeout = (
+            config_manager.get_request_timeout_seconds()
+        )  # Configurable timeout
 
         # Auto-unload watchdog
         self._auto_unload_task = None
@@ -1384,12 +1391,23 @@ class RunnerManager:
         # Build URL
         url = f"http://{runner.host}:{runner.port}{endpoint}"
 
+        # If timeout is 0, disable all timeouts; otherwise set explicit values
+        if self.timeout == 0:
+            timeout_config = aiohttp.ClientTimeout(
+                total=None, sock_connect=None, sock_read=None
+            )
+        else:
+            # Use the same value for total and sock_read to avoid premature read timeouts
+            timeout_config = aiohttp.ClientTimeout(
+                total=self.timeout, sock_connect=self.timeout, sock_read=self.timeout
+            )
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     url,
                     json=request_data,
-                    timeout=aiohttp.ClientTimeout(total=self.timeout),
+                    timeout=timeout_config,
                 ) as response:
                     try:
                         response_data = await response.json()

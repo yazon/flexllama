@@ -219,6 +219,7 @@ class ConfigManager:
         int_fields = [
             "n_ctx",
             "n_batch",
+            "u_batch",
             "n_threads",
             "main_gpu",
             "n_gpu_layers",
@@ -636,6 +637,23 @@ class ConfigManager:
             True if retries should be performed on model loading errors, False otherwise.
         """
         return self.get_retry_config().get("retry_on_model_loading", True)
+
+    def get_request_timeout_seconds(self):
+        """Get the request timeout in seconds for forwarding requests to runners.
+
+        Returns:
+            The request timeout in seconds. Defaults to 1800 (30 minutes) for long-running requests.
+        """
+        return self.config.get("request_timeout_seconds", 1800)
+
+    def get_streaming_timeout_seconds(self):
+        """Get the streaming request timeout in seconds.
+
+        Returns:
+            The streaming timeout in seconds. Defaults to 3600 (1 hour) for very long streaming requests.
+            Set to 0 or None to disable timeout for streaming requests.
+        """
+        return self.config.get("streaming_timeout_seconds", 3600)
 
 
 if __name__ == "__main__":
