@@ -5,6 +5,8 @@
         "port": 8080,
         "health_endpoint": "/health"
     },
+    "request_timeout_seconds": 1800,
+    "streaming_timeout_seconds": 0,
     "retry_config": {
         "max_retries": 3,
         "base_delay_seconds": 2,
@@ -41,6 +43,7 @@
             "model_alias": "model1",
             "n_ctx": 4096,
             "n_batch": 512,
+            "u_batch": 128,
             "n_threads": 4,
             "offload_kqv": true,
             "flash_attn": "on",
@@ -61,6 +64,7 @@
             "model_alias": "model2",
             "n_ctx": 8192,
             "n_batch": 256,
+            "u_batch": 64,
             "n_threads": 8,
             "chat_template": "mistral-instruct",
             "offload_kqv": false,
