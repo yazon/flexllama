@@ -23,6 +23,7 @@
 - 🔍 **Embeddings & Reranking** - Supports models for embeddings and reranking
 - ⚡ **Auto-start** - Automatically start default runners on launch
 - 🔄 **Model switching** - Dynamically load/unload models as needed
+- ⏱️ **Auto model unload** - Automatically unload models after a configurable idle timeout
 
 ![FlexLLama Dashboard](static/dashboard.gif)
 
@@ -80,7 +81,7 @@
 
 ### 🐳 Docker
 
-FlexLLama can be run using Docker and Docker Compose. We provide profiles for both CPU-only and GPU-accelerated (NVIDIA CUDA) environments.
+FlexLLama can be run using Docker and Docker Compose. We provide profiles for CPU-only, GPU-accelerated (NVIDIA CUDA), and Vulkan GPU environments.
 
 1. **Clone the repository:**
 
@@ -93,9 +94,14 @@ After cloning, you can proceed with the quick start script or a manual setup.
 
 ______________________________________________________________________
 
-#### Using the Quick Start Script (`docker-start.sh`)
+#### Using the Quick Start Script (`docker-start.sh`) - ONE COMMAND SETUP! ✨
 
-For an easier start, the `docker-start.sh` helper script automates several setup steps. It checks your Docker environment, builds the correct image (CPU or GPU) and provides the commands to launch FlexLLama.
+The `docker-start.sh` script provides a **fully automated, plug-and-play setup**. Just run ONE command and everything is configured automatically:
+- Auto-detects your GPU(s)
+- Auto-configures NVIDIA runtime (if needed)
+- Builds the correct Docker image
+- Starts the container automatically
+- **NVIDIA + AMD multi-GPU systems work automatically!**
 
 1. **Make the script executable (Linux/Unix):**
 
@@ -103,35 +109,37 @@ For an easier start, the `docker-start.sh` helper script automates several setup
    chmod +x docker-start.sh
    ```
 
-1. **Run the script:**
-   Use the `--gpu` flag for NVIDIA GPU support.
+2. **Run ONE command - that's it!**
 
-   *For CPU-only setup:*
-
+   *For CPU-only:*
    ```bash
    ./docker-start.sh
+   # Windows:
+   .\docker-start.ps1
    ```
 
-   or
-
+   *For NVIDIA CUDA GPUs:*
    ```bash
-   ./docker-start.ps1
+   ./docker-start.sh --gpu=cuda
+   # Windows:
+   .\docker-start.ps1 -gpu cuda
    ```
 
-   *For GPU-accelerated setup:*
-
+   *For Vulkan (AMD/Intel - works with multiple GPUs!):*
    ```bash
-   ./docker-start.sh --gpu
+   ./docker-start.sh --gpu=vulkan
+   # Windows:
+   .\docker-start.ps1 -gpu vulkan
    ```
 
-   or
+3. **Done! FlexLLama is running automatically!**
 
-   ```bash
-   ./docker-start.ps1 -gpu
-   ```
-
-1. **Follow the on-screen instructions:**
-   The script will guide you.
+   The script automatically:
+   - Detects your GPUs
+   - Configures NVIDIA runtime (if needed)
+   - Builds and starts everything
+   
+   **Just open:** http://localhost:8090
 
 ______________________________________________________________________
 
@@ -157,7 +165,7 @@ If you prefer to run the steps manually, follow this guide:
    ```
 
 1. **Build and Start FlexLLama with Docker Compose (Recommended):**
-   Use the `--profile` flag to select your environment. The service will be available at `http://localhost:8080`.
+   Use the `--profile` flag to select your environment. The service will be available at `http://localhost:8090`.
 
    *For CPU-only:*
 
@@ -171,6 +179,12 @@ If you prefer to run the steps manually, follow this guide:
    docker compose --profile gpu up --build -d
    ```
 
+   *For Vulkan GPU support (AMD/Intel):*
+
+   ```bash
+   docker compose --profile vulkan up --build -d
+   ```
+
 1. **View Logs**
    To monitor the output of your services, you can view their logs in real-time.
 
@@ -180,10 +194,16 @@ If you prefer to run the steps manually, follow this guide:
    docker compose --profile cpu logs -f
    ```
 
-   *For the GPU service:*
+   *For the GPU service (CUDA):*
 
    ```bash
    docker compose --profile gpu logs -f
+   ```
+
+   *For the Vulkan service:*
+
+   ```bash
+   docker compose --profile vulkan logs -f
    ```
 
    *(Press `Ctrl+C` to stop viewing the logs.)*
@@ -197,7 +217,7 @@ If you prefer to run the steps manually, follow this guide:
    # Build the image
    docker build -t flexllama:latest .
    # Run the container
-   docker run -d -p 8080:8080 \
+   docker run -d -p 8090:8090 \
      -v $(pwd)/models:/app/models:ro \
      -v $(pwd)/docker/config.json:/app/config.json:ro \
      flexllama:latest
@@ -209,14 +229,69 @@ If you prefer to run the steps manually, follow this guide:
    # Build the image
    docker build -f Dockerfile.cuda -t flexllama-gpu:latest .
    # Run the container
-   docker run -d --gpus all -p 8080:8080 \
+   docker run -d --gpus all -p 8090:8090 \
      -v $(pwd)/models:/app/models:ro \
      -v $(pwd)/docker/config.json:/app/config.json:ro \
      flexllama-gpu:latest
    ```
 
+   *For Vulkan GPU support:*
+
+   ```bash
+   # Build the image
+   docker build -f Dockerfile.vulkan -t flexllama-vulkan:latest .
+   # Run the container (AMD/Intel GPUs)
+   docker run -d --device /dev/dri:/dev/dri -p 8090:8090 \
+     -v $(pwd)/models:/app/models:ro \
+     -v $(pwd)/docker/config.json:/app/config.json:ro \
+     flexllama-vulkan:latest
+   ```
+
 1. **Open the dashboard:**
-   Access the FlexLLama dashboard in your browser: `http://localhost:8080`
+   Access the FlexLLama dashboard in your browser: `http://localhost:8090`
+
+______________________________________________________________________
+
+### Vulkan GPU Support
+
+FlexLLama supports Vulkan-based GPU acceleration for AMD and Intel GPUs on Linux.
+
+**Prerequisites:**
+- Linux host with Vulkan drivers installed
+- **AMD GPUs**: Mesa RADV drivers (`mesa-vulkan-drivers`) - works immediately
+- **Intel GPUs**: Mesa ANV drivers (`mesa-vulkan-drivers`) - works immediately
+
+**Note:** For NVIDIA GPUs, please use the CUDA backend (`--gpu=cuda`).
+
+**Configuration:**
+
+Edit your `docker/config.json` to enable Vulkan:
+
+```json
+{
+  "runner": "runner1",
+  "model": "/app/models/your-model.gguf",
+  "model_alias": "vulkan-model",
+  "n_gpu_layers": 99,
+  "args": "--device Vulkan0"
+}
+```
+
+You can also use the example configuration:
+```bash
+cp docker/config.vulkan.json docker/config.json
+```
+
+**Troubleshooting:**
+
+Check if Vulkan is working inside the container:
+```bash
+docker exec -it <container-id> vulkaninfo --summary
+```
+
+For AMD ROCm systems, you may need to add `/dev/kfd` device mapping in `docker-compose.yml`.
+
+**Note**: Vulkan support on Windows with Docker is limited. For best results on Windows, use WSL2 with the Linux instructions or use the CUDA backend instead.
 
 ## Configuration
 

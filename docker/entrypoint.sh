@@ -2,6 +2,47 @@
 
 set -e
 
+# Handle Vulkan GPU permissions if running as root
+if [[ "$(id -u)" == "0" ]]; then
+    echo "Running as root, setting up GPU access permissions..."
+    
+    # Get GIDs from environment or use defaults
+    VIDEO_GID="${HOST_VIDEO_GID:-44}"
+    RENDER_GID="${HOST_RENDER_GID:-109}"
+    
+    # Create groups if they don't exist and add flexllama user to them
+    if ! getent group "$VIDEO_GID" >/dev/null 2>&1; then
+        groupadd -g "$VIDEO_GID" video_host || true
+    fi
+    
+    if ! getent group "$RENDER_GID" >/dev/null 2>&1 && [ "$RENDER_GID" != "$VIDEO_GID" ]; then
+        groupadd -g "$RENDER_GID" render_host || true
+    fi
+    
+    # Add flexllama user to the groups
+    usermod -aG "$VIDEO_GID" flexllama 2>/dev/null || true
+    if [ "$RENDER_GID" != "$VIDEO_GID" ]; then
+        usermod -aG "$RENDER_GID" flexllama 2>/dev/null || true
+    fi
+    
+    # Ensure /dev/dri is accessible
+    if [ -d "/dev/dri" ]; then
+        chmod -R g+rw /dev/dri 2>/dev/null || true
+        echo "✅ GPU device permissions configured"
+        ls -la /dev/dri
+    else
+        echo "⚠️  /dev/dri not found - GPU may not be available"
+    fi
+    
+    # Create logs directory with correct permissions
+    mkdir -p /app/logs
+    chown -R flexllama:flexllama /app/logs
+    
+    # Switch to flexllama user and re-execute this script
+    echo "Switching to flexllama user..."
+    exec gosu flexllama "$0" "$@"
+fi
+
 # Default configuration file
 DEFAULT_CONFIG="/app/docker/config.json"
 
@@ -51,6 +92,12 @@ if ! command -v llama-server &> /dev/null; then
     echo "Warning: llama-server binary not found in PATH"
     echo "Available binaries:"
     find /usr -name "*llama*" 2>/dev/null | head -5
+fi
+
+# Check Vulkan availability if vulkaninfo is present
+if command -v vulkaninfo &> /dev/null; then
+    echo "Vulkan information:"
+    vulkaninfo --summary 2>/dev/null || echo "  (Unable to query Vulkan devices)"
 fi
 
 # Note: Running as user flexllama (set by Dockerfile USER directive)
