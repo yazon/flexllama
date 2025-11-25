@@ -78,7 +78,8 @@ COPY docker/ ./docker/
 
 # Copy and setup entrypoint script
 COPY docker/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+RUN sed -i 's/\r$//' /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
 
 # Create necessary directories
 RUN mkdir -p /app/models /app/config && \
