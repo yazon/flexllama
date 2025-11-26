@@ -1,7 +1,6 @@
-# Multi-stage build for FlexLLama with CUDA-enabled llama.cpp support
-
-# Stage 1: Build llama.cpp with CUDA support
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+# Multi-stage build for FlexLLama with Vulkan support (AMD and Intel GPUs)
+# Stage 1: Build llama.cpp with Vulkan support
+FROM ubuntu:24.04 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -12,71 +11,82 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     libcurl4-openssl-dev \
+    libopenblas-dev \
+    libvulkan-dev \
+    glslang-tools \
+    glslc \
     && rm -rf /var/lib/apt/lists/*
 
-# Set up CUDA environment for building
-ENV CUDA_HOME=/usr/local/cuda
-ENV PATH=${CUDA_HOME}/bin:${PATH}
-
-# Make stub libraries visible during build (for environments without GPU driver)
-ENV CUDA_STUB=/usr/local/cuda/lib64/stubs
-RUN ln -s ${CUDA_STUB}/libcuda.so ${CUDA_STUB}/libcuda.so.1 && \
-    echo "${CUDA_STUB}" > /etc/ld.so.conf.d/cuda-stubs.conf && \
-    ldconfig
-ENV LIBRARY_PATH=${CUDA_STUB}:${LIBRARY_PATH}
-
-# Clone and build llama.cpp with CUDA support
+# Clone and build llama.cpp with Vulkan support
 WORKDIR /build
 
 RUN git clone https://github.com/ggerganov/llama.cpp.git && \
     cd llama.cpp && \
     cmake -B build \
+        -DGGML_VULKAN=ON \
+        -DGGML_BLAS=ON \
+        -DGGML_BLAS_VENDOR=OpenBLAS \
         -DBUILD_SHARED_LIBS=ON \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CUDA_ARCHITECTURES="50;52;53;60;61;62;70;72;75;80;86;87;89;90" \
-        -DGGML_CUDA=ON \
-        -DGGML_CUDA_F16=ON \
         -DCMAKE_INSTALL_PREFIX=/opt/llama.cpp \
         -DLLAMA_BUILD_SERVER=ON && \
     cmake --build build --config Release -j$(nproc) && \
     cmake --install build && \
-     # Copy all built libraries to a persistent location before the layer ends
-     mkdir -p /opt/llama.cpp/lib && \
-     find build -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; && \
-     # Specifically ensure libmtmd.so is copied
-     find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true && \
-     # List what we have for debugging
-     echo "=== Libraries in /opt/llama.cpp/lib ===" && \
-     ls -la /opt/llama.cpp/lib/
+    mkdir -p /opt/llama.cpp/lib && \
+    find build -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; && \
+    find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true
 
-# Stage 2: Runtime environment with CUDA runtime
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+# Stage 2: Runtime environment with AMD/Intel Vulkan support
+FROM ubuntu:24.04
 
-# Install Python and runtime dependencies
+# Install runtime dependencies with Vulkan support for AMD and Intel
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-venv \
     python3-pip \
     curl \
     jq \
+    libgomp1 \
+    libopenblas0 \
+    libvulkan1 \
+    vulkan-tools \
+    mesa-vulkan-drivers \
+    libxext6 \
+    libx11-6 \
+    libxau6 \
+    libxdmcp6 \
+    libxcb1 \
+    gosu \
+    ca-certificates \
+    gnupg \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/python3 /usr/bin/python
 
-# Set up comprehensive library paths
-ENV CUDA_HOME=/usr/local/cuda
-ENV PATH=${CUDA_HOME}/bin:/usr/local/bin:${PATH}
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+# Intel Vulkan support (IRIS driver)
+RUN apt-get update && apt-get install -y \
+    intel-media-va-driver-non-free \
+    intel-level-zero-loader \
+    level-zero-loader \
+    2>/dev/null || true && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy everything from the installed location
+# Set up library paths
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu
+ENV PATH=/usr/local/bin:${PATH}
+
+# AMD RADV driver (via Mesa) - enable ACO compiler for better performance
+ENV RADV_PERFTEST=aco
+
+# Intel Arc GPU support
+ENV ONEAPI_DEVICE_SELECTOR=level_zero
+
+# Copy everything from the built location
 COPY --from=builder /opt/llama.cpp/ /usr/local/
- 
+
 # Ensure all libraries are properly linked
 RUN ldconfig && \
-    # Verify libmtmd.so is available
-    ldconfig -p | grep mtmd || echo "Warning: libmtmd.so not found in ldconfig" && \
-    # Check if llama-server can find all its dependencies
-    ldd /usr/local/bin/llama-server || echo "Warning: Some dependencies might be missing"
+    echo "=== Vulkan Drivers ===" && \
+    vulkaninfo 2>&1 | grep -E "(GPU|deviceName|MESA|Intel)" || echo "Vulkan info check complete"
 
 # Create a virtual environment
 ENV VENV_PATH=/opt/venv
@@ -105,17 +115,15 @@ COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN sed -i 's/\r$//' /app/entrypoint.sh && \
     chmod +x /app/entrypoint.sh
 
-# Create necessary directories and set permissions.
-# The 'logs' directory is intentionally omitted; it will be created at runtime
-# by the application to ensure it has the correct ownership.
+# Create necessary directories and set permissions
 RUN mkdir -p /app/models /app/config && \
     chown -R flexllama:flexllama /app $VENV_PATH
 
 # Create default config from template
 COPY docker/config.qwen3.unified.json /app/config.json
 
-# Switch to non-root user
-USER flexllama
+# Note: Container will start as root (via docker-compose user: "0:0")
+# The entrypoint script will configure GPU permissions and switch to flexllama user
 
 # Expose ports
 # 8090: FlexLLama API and dashboard
@@ -127,7 +135,7 @@ ENV FLEXLLAMA_CONFIG=/app/config.json
 ENV FLEXLLAMA_HOST=0.0.0.0
 ENV FLEXLLAMA_PORT=8090
 ENV PYTHONPATH=/app
-ENV CUDA_VISIBLE_DEVICES=0
+ENV VK_LOADER_DEBUG=error
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

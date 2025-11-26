@@ -2,7 +2,7 @@
     "auto_start_runners": true,
     "api": {
         "host": "0.0.0.0",
-        "port": 8080,
+        "port": 8090,
         "health_endpoint": "/health"
     },
     "retry_config": {
@@ -15,7 +15,7 @@
         "type": "llama-server",
         "path": "/usr/local/bin/llama-server",
         "host": "127.0.0.1",
-        "port": 8085,
+        "port": 8095,
         "inherit_env": true,
         "env": {},
         "auto_unload_timeout_seconds": 300,
@@ -25,7 +25,7 @@
         "type": "llama-server",
         "path": "/usr/local/bin/llama-server",
         "host": "127.0.0.1",
-        "port": 8086,
+        "port": 8096,
         "inherit_env": true,
         "env": {},
         "auto_unload_timeout_seconds": 0,

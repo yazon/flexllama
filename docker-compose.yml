@@ -7,23 +7,23 @@ services:
     restart: unless-stopped
     profiles: ["cpu"]
     ports:
-      - "8090:8080"  # FlexLLama API and dashboard
-      - "8085:8085"  # Runner 1
-      - "8086:8086"  # Runner 2
-      - "8087:8087"  # Runner 3 (optional)
-      - "8088:8088"  # Runner 4 (optional)
-      - "8089:8089"  # Runner 5 (optional)
+      - "8090:8090"  # FlexLLama API and dashboard
+      - "8095:8095"  # Runner 1
+      - "8096:8096"  # Runner 2
+      - "8097:8097"  # Runner 3 (optional)
+      - "8098:8098"  # Runner 4 (optional)
+      - "8099:8099"  # Runner 5 (optional)
     volumes:
-      - ./docker/config.json:/app/config.json:ro  # Configuration file
+      - ./docker/config.qwen3.unified.json:/app/config.json:ro  # Configuration file
       - ./models:/app/models:ro                   # Model files directory
     environment:
       - FLEXLLAMA_CONFIG=/app/config.json
       - FLEXLLAMA_HOST=0.0.0.0
-      - FLEXLLAMA_PORT=8080
+      - FLEXLLAMA_PORT=8090
     networks:
       - flexllama-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -37,19 +37,19 @@ services:
     restart: unless-stopped
     profiles: ["gpu"]
     ports:
-      - "8090:8080"  # FlexLLama API and dashboard
-      - "8085:8085"  # Runner 1
-      - "8086:8086"  # Runner 2
-      - "8087:8087"  # Runner 3 (optional)
-      - "8088:8088"  # Runner 4 (optional)
-      - "8089:8089"  # Runner 5 (optional)
+      - "8090:8090"  # FlexLLama API and dashboard
+      - "8095:8095"  # Runner 1
+      - "8096:8096"  # Runner 2
+      - "8097:8097"  # Runner 3 (optional)
+      - "8098:8098"  # Runner 4 (optional)
+      - "8099:8099"  # Runner 5 (optional)
     volumes:
-      - ./docker/config.json:/app/config.json:ro
+      - ./docker/config.qwen3.unified.json:/app/config.json:ro
       - ./models:/app/models:ro
     environment:
       - FLEXLLAMA_CONFIG=/app/config.json
       - FLEXLLAMA_HOST=0.0.0.0
-      - FLEXLLAMA_PORT=8080
+      - FLEXLLAMA_PORT=8090
     deploy:
       resources:
         reservations:
@@ -60,7 +60,49 @@ services:
     networks:
       - flexllama-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  flexllama-vulkan:
+    image: flexllama-vulkan:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.vulkan
+    restart: unless-stopped
+    profiles: ["vulkan"]
+    ports:
+      - "8090:8090"  # FlexLLama API and dashboard
+      - "8095:8095"  # Runner 1
+      - "8096:8096"  # Runner 2
+      - "8097:8097"  # Runner 3 (optional)
+      - "8098:8098"  # Runner 4 (optional)
+      - "8099:8099"  # Runner 5 (optional)
+    volumes:
+      - ./docker/config.qwen3.unified.json:/app/config.json:ro
+      - ./models:/app/models:ro
+    devices:
+    - /dev/dri:/dev/dri  # GPU access for AMD and Intel
+    # AMD ROCm systems should also add:
+    # - /dev/kfd:/dev/kfd
+    user: "0:0"
+    environment:
+      - FLEXLLAMA_CONFIG=/app/config.json
+      - FLEXLLAMA_HOST=0.0.0.0
+      - FLEXLLAMA_PORT=8090
+      - VK_LOADER_DEBUG=error
+      - HOST_VIDEO_GID=${VIDEO_GID:-44}
+      - HOST_RENDER_GID=${RENDER_GID:-109}
+    cap_add:
+      - SYS_PTRACE
+    group_add:
+      - video
+    networks:
+      - flexllama-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 30s
       timeout: 10s
       retries: 3

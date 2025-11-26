@@ -78,33 +78,34 @@ COPY docker/ ./docker/
 
 # Copy and setup entrypoint script
 COPY docker/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+RUN sed -i 's/\r$//' /app/entrypoint.sh && \
+    chmod +x /app/entrypoint.sh
 
 # Create necessary directories
 RUN mkdir -p /app/models /app/config && \
     chown -R flexllama:flexllama /app
 
 # Create default config from template
-COPY docker/config.json /app/config.json
+COPY docker/config.qwen3.unified.json /app/config.json
 
 # Switch to non-root user
 USER flexllama
 
 # Expose ports
-# 8080: FlexLLama API and dashboard
-# 8085-8090: Default ports for llama-server runners
-EXPOSE 8080 8085 8086 8087 8088 8089 8090
+# 8090: FlexLLama API and dashboard
+# 8095-8100: Default ports for llama-server runners
+EXPOSE 8090 8095 8096 8097 8098 8099 8100
 
 # Environment variables
 ENV FLEXLLAMA_CONFIG=/app/config.json
 ENV FLEXLLAMA_HOST=0.0.0.0
-ENV FLEXLLAMA_PORT=8080
+ENV FLEXLLAMA_PORT=8090
 ENV PYTHONPATH=/app
 ENV PATH=/usr/local/bin:$PATH
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8090/health || exit 1
 
 # Set entrypoint
 ENTRYPOINT ["/app/entrypoint.sh"]
