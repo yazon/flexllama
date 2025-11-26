@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flexllama"
-version = "0.1.7"
+version = "0.1.8"
 description = "A lightweight Python tool that easily runs multiple llama.cpp server instances with OpenAI v1 API compatibility"
 readme = "README.md"
 license = {text = "BSD-3-Clause"}
@@ -26,7 +26,7 @@ keywords = [
     "inference",
     "server"
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "aiohttp>=3.8.0",
     "psutil>=7.0.0",

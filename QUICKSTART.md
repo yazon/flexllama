@@ -90,7 +90,7 @@ The dashboard provides a web interface to interact with your models and monitor 
 To see what's happening:
 
 ```bash
-# View logs (replace 'cpu' with 'gpu' or 'vulkan' if using GPU)
+# View logs for all running services
 docker compose logs -f
 ```
 
