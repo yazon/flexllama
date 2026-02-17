@@ -1,0 +1,105 @@
+# Docker Compose: FlexLLama + OpenClaw
+#
+# Runs FlexLLama as a local model backend for OpenClaw.
+#
+# Prerequisites:
+#   1. Place .gguf model files in ./models/
+#   2. Edit docker/config.openclaw.json with your model paths and aliases
+#   3. Build OpenClaw image (see below)
+#   4. Create .env file (see below)
+#
+# Quick start (CPU):
+#   # Edit docker/config.openclaw.json with your model filename
+#   docker compose -f docker/docker-compose.openclaw.yml --profile cpu up --build -d
+#
+# GPU (NVIDIA CUDA):
+#   docker compose -f docker/docker-compose.openclaw.yml --profile gpu up --build -d
+#
+# Required env vars (set in shell or .env file):
+#   OPENCLAW_GATEWAY_TOKEN=your-secret-token
+#   OPENCLAW_CONFIG_DIR=~/.openclaw
+#   OPENCLAW_WORKSPACE_DIR=~/.openclaw/workspace
+
+services:
+  flexllama:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    profiles: ["cpu"]
+    ports:
+      - "8090:8090"
+    volumes:
+      - ../models:/app/models:ro
+      - ./config.openclaw.json:/app/config.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - flexllama-openclaw
+
+  flexllama-gpu:
+    build:
+      context: ..
+      dockerfile: Dockerfile.cuda
+    restart: unless-stopped
+    profiles: ["gpu"]
+    ports:
+      - "8090:8090"
+    volumes:
+      - ../models:/app/models:ro
+      - ./config.openclaw.json:/app/config.json:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+              count: all
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - flexllama-openclaw
+
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    environment:
+      HOME: /home/node
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-~/.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-~/.openclaw/workspace}:/home/node/.openclaw/workspace
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+    init: true
+    restart: unless-stopped
+    depends_on:
+      flexllama:
+        condition: service_healthy
+        required: false
+      flexllama-gpu:
+        condition: service_healthy
+        required: false
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "lan",
+        "--port",
+        "18789",
+      ]
+    networks:
+      - flexllama-openclaw
+
+networks:
+  flexllama-openclaw:
+    driver: bridge

@@ -1,0 +1,29 @@
+{
+    "auto_start_runners": true,
+    "api": {
+        "host": "0.0.0.0",
+        "port": 8090,
+        "health_endpoint": "/health"
+    },
+    "runner1": {
+        "type": "llama-server",
+        "path": "/usr/local/bin/llama-server",
+        "host": "127.0.0.1",
+        "port": 8095,
+        "inherit_env": true,
+        "env": {},
+        "auto_unload_timeout_seconds": 300
+    },
+    "models": [
+        {
+            "runner": "runner1",
+            "model": "/app/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+            "model_alias": "qwen3-4b",
+            "n_ctx": 4096,
+            "n_batch": 256,
+            "flash_attn": "auto",
+            "use_mlock": true,
+            "jinja": true
+        }
+    ]
+}
