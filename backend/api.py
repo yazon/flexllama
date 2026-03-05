@@ -2,7 +2,9 @@
 API server for FlexLLama.
 
 This module implements OpenAI-compatible API endpoints that route requests to the
-appropriate llama.cpp server instance based on the requested model.
+appropriate llama.cpp server instance based on the requested model. Supported
+endpoints include Chat Completions, Completions, Embeddings, Rerank, and the
+OpenAI Responses API.
 """
 
 import time
@@ -20,7 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 class APIServer:
-    """OpenAI-compatible API server with async support."""
+    """OpenAI-compatible API server with async support.
+
+    Proxies requests to llama.cpp server instances for the following endpoints:
+    /v1/chat/completions, /v1/completions, /v1/embeddings, /v1/rerank, and
+    /v1/responses (OpenAI Responses API).
+    """
 
     def __init__(self, config_manager, runner_manager):
         """Initialize the API server.
@@ -80,6 +87,7 @@ class APIServer:
             web.post("/v1/completions", self.handle_completions),
             web.post("/v1/embeddings", self.handle_embeddings),
             web.post("/v1/rerank", self.handle_rerank),
+            web.post("/v1/responses", self.handle_responses),
             web.options("/{tail:.*}", self.handle_options),
             # Runner control routes
             web.post("/v1/runners/{runner_name}/start", self.handle_runner_start),
@@ -798,6 +806,43 @@ class APIServer:
         # Forward request with unified pre-flight approach
         return await self._forward_request_unified(
             request, model_alias, "/v1/rerank", data
+        )
+
+    async def handle_responses(self, request):
+        """Handle POST /v1/responses requests (OpenAI Responses API).
+
+        Forwards the request as-is to the underlying llama.cpp server's
+        /v1/responses endpoint. Requires a llama-server build that includes
+        Responses API support (llama.cpp PR #18227+).
+
+        Args:
+            request: The request.
+
+        Returns:
+            The response.
+        """
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": {"message": "Invalid JSON"}}, status=400)
+
+        model_alias = self._extract_model_alias(data)
+
+        if model_alias is None:
+            return web.json_response(
+                {"error": {"message": "Model not specified"}}, status=400
+            )
+
+        try:
+            self.config_manager.get_model_config(model_alias)
+        except ValueError:
+            return web.json_response(
+                {"error": {"message": f"Model not found: {model_alias}"}}, status=404
+            )
+
+        # Forward request with unified pre-flight approach
+        return await self._forward_request_unified(
+            request, model_alias, "/v1/responses", data
         )
 
     def _extract_model_alias(self, data):
