@@ -286,7 +286,7 @@ async def test_streaming_chat_completions(base_url, model):
                                         and len(json_data["choices"]) > 0
                                     ):
                                         delta = json_data["choices"][0].get("delta", {})
-                                        if "content" in delta:
+                                        if delta.get("content") is not None:
                                             content_parts.append(delta["content"])
                                 except json.JSONDecodeError:
                                     continue
