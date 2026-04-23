@@ -176,6 +176,114 @@ async def test_health_endpoint(base_url):
             return None
 
 
+async def test_cors_headers(base_url, model, expected_origin):
+    """Verify CORS headers on preflight, regular, and streaming responses.
+
+    Only runs when the operator passes --cors-origin, since CORS is opt-in
+    via the api.cors_allow_origins config option. The test covers the three
+    code paths that CORS touches separately:
+
+    - OPTIONS preflight answered by the middleware short-circuit.
+    - Regular JSON response (GET /v1/models) getting its header from the
+      on_response_prepare signal.
+    - Streaming response (POST /v1/chat/completions with stream=true),
+      which flushes headers via StreamResponse.prepare() and used to miss
+      the CORS header prior to the on_response_prepare wiring.
+
+    Args:
+        base_url: The base URL of the API server.
+        model: A model alias to exercise the streaming endpoint with.
+        expected_origin: The origin value expected in Access-Control-Allow-Origin.
+            Use "*" when the server is configured with cors_allow_origins=["*"],
+            otherwise the exact origin string the client is sending.
+
+    Returns:
+        True if all three checks pass, False otherwise.
+    """
+    logger.info("Testing CORS headers (expected origin: %s)", expected_origin)
+    client_origin = "http://flexllama-test.invalid" if expected_origin == "*" else expected_origin
+    timeout = aiohttp.ClientTimeout(total=30)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        # 1. Preflight
+        preflight_headers = {
+            "Origin": client_origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization, content-type",
+        }
+        try:
+            async with session.options(
+                f"{base_url}/v1/chat/completions", headers=preflight_headers
+            ) as response:
+                allow_origin = response.headers.get("Access-Control-Allow-Origin")
+                allow_headers = response.headers.get("Access-Control-Allow-Headers", "")
+                if allow_origin != expected_origin:
+                    logger.error(
+                        "Preflight Access-Control-Allow-Origin mismatch: got %r, expected %r",
+                        allow_origin,
+                        expected_origin,
+                    )
+                    return False
+                if "authorization" not in allow_headers.lower():
+                    logger.error(
+                        "Preflight did not echo Authorization in Access-Control-Allow-Headers: %r",
+                        allow_headers,
+                    )
+                    return False
+        except Exception as e:
+            logger.error("Preflight request failed: %s", e)
+            return False
+
+        # 2. Regular JSON response
+        try:
+            async with session.get(
+                f"{base_url}/v1/models", headers={"Origin": client_origin}
+            ) as response:
+                allow_origin = response.headers.get("Access-Control-Allow-Origin")
+                if allow_origin != expected_origin:
+                    logger.error(
+                        "GET /v1/models Access-Control-Allow-Origin mismatch: got %r, expected %r",
+                        allow_origin,
+                        expected_origin,
+                    )
+                    return False
+        except Exception as e:
+            logger.error("GET /v1/models failed: %s", e)
+            return False
+
+        # 3. Streaming response (header must arrive before the body starts)
+        stream_payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "Reply with the single word OK."}],
+            "stream": True,
+            "max_tokens": 8,
+        }
+        try:
+            async with session.post(
+                f"{base_url}/v1/chat/completions",
+                headers={"Origin": client_origin, "Content-Type": "application/json"},
+                json=stream_payload,
+            ) as response:
+                allow_origin = response.headers.get("Access-Control-Allow-Origin")
+                if allow_origin != expected_origin:
+                    logger.error(
+                        "Streaming /v1/chat/completions Access-Control-Allow-Origin mismatch: "
+                        "got %r, expected %r",
+                        allow_origin,
+                        expected_origin,
+                    )
+                    return False
+                # Drain a few bytes so the server can finish cleanly.
+                async for _ in response.content.iter_chunked(1024):
+                    break
+        except Exception as e:
+            logger.error("Streaming request failed: %s", e)
+            return False
+
+    logger.info("CORS headers verified on preflight, GET, and streaming POST")
+    return True
+
+
 async def test_chat_completions(base_url, model):
     """Test the /v1/chat/completions endpoint.
 
@@ -369,6 +477,17 @@ async def main():
         "--url", default="http://localhost:8080", help="Base URL of the API server"
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument(
+        "--cors-origin",
+        default=None,
+        help=(
+            "When set, verify CORS response headers against this expected "
+            "Access-Control-Allow-Origin value. Use '*' if the server is "
+            "configured with cors_allow_origins=['*'], otherwise the exact "
+            "origin string that is allowlisted. Skip the flag when CORS is "
+            "disabled server-side."
+        ),
+    )
     args = parser.parse_args()
 
     # Set up test logging
@@ -417,6 +536,14 @@ async def main():
         logger.info("=" * 60)
         if not await test_streaming_chat_completions(args.url, test_model):
             logger.warning(f"Streaming test failed for model {test_model}")
+
+        # Optional: verify CORS headers when the server is configured for them.
+        if args.cors_origin:
+            logger.info("=" * 60)
+            logger.info("Testing CORS headers")
+            logger.info("=" * 60)
+            if not await test_cors_headers(args.url, test_model, args.cors_origin):
+                logger.warning("CORS header test failed")
 
         # Test concurrent requests across different runners (if multiple runners are active)
         logger.info("=" * 60)

@@ -47,8 +47,22 @@ class APIServer:
         # Get frontend directory path - try package resources first, fallback to relative path
         self.frontend_path = self._get_frontend_path()
 
+        # Load CORS configuration before building the application so the middleware
+        # can be registered with the right allowlist.
+        self.cors_allow_origins = config_manager.get_cors_allow_origins()
+
         # Set a larger client_max_size to handle image uploads (10MB should be enough)
-        self.app = web.Application(client_max_size=10 * 1024 * 1024)
+        self.app = web.Application(
+            client_max_size=10 * 1024 * 1024,
+            middlewares=[self._build_cors_middleware()],
+        )
+        # CORS responsibilities are split: the middleware answers preflight
+        # (OPTIONS) directly, and on_response_prepare attaches the
+        # Access-Control-Allow-Origin header to every other response. The
+        # signal is used instead of mutating the response after the handler
+        # returns because StreamResponse.prepare() flushes headers immediately,
+        # so post-handler mutation never reaches streaming clients.
+        self.app.on_response_prepare.append(self._apply_cors_headers)
 
         # Set keepalive timeout to 60 minutes for long-running requests
         self.keepalive_timeout = 3600  # 60 minutes
@@ -88,7 +102,6 @@ class APIServer:
             web.post("/v1/embeddings", self.handle_embeddings),
             web.post("/v1/rerank", self.handle_rerank),
             web.post("/v1/responses", self.handle_responses),
-            web.options("/{tail:.*}", self.handle_options),
             # Runner control routes
             web.post("/v1/runners/{runner_name}/start", self.handle_runner_start),
             web.post("/v1/runners/{runner_name}/stop", self.handle_runner_stop),
@@ -197,21 +210,72 @@ class APIServer:
                     f"Request ended for model {model_alias}, active requests: {runner.active_requests}"
                 )
 
-    async def handle_options(self, request):
-        """Handle OPTIONS requests for CORS.
+    def _build_cors_middleware(self):
+        """Build an aiohttp middleware that answers CORS preflight requests.
 
-        Args:
-            request: The request.
+        Non-preflight responses get their CORS headers from
+        _apply_cors_headers via the on_response_prepare signal; this
+        middleware only short-circuits OPTIONS so preflight never reaches
+        the regular handlers.
 
-        Returns:
-            The response.
+        Access-Control-Allow-Credentials is intentionally NOT set: combining
+        it with "*" is invalid, and enabling it by default would let any
+        allowed origin read authenticated responses. Operators who need
+        credentialed CORS can extend this later with an explicit config flag.
         """
-        headers = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-        }
-        return web.Response(status=200, headers=headers)
+        @web.middleware
+        async def cors_middleware(request, handler):
+            if request.method == "OPTIONS":
+                origin = self._resolve_cors_origin(request)
+                headers = {}
+                if origin:
+                    headers["Access-Control-Allow-Origin"] = origin
+                    if origin != "*":
+                        headers["Vary"] = "Origin"
+                    # Echo the headers the client asked to send so Authorization
+                    # (used by OpenAI-compatible clients) passes preflight.
+                    requested_headers = request.headers.get(
+                        "Access-Control-Request-Headers", "Content-Type, Authorization"
+                    )
+                    headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+                    headers["Access-Control-Allow-Headers"] = requested_headers
+                    headers["Access-Control-Max-Age"] = "600"
+                return web.Response(status=200, headers=headers)
+
+            # Non-preflight: actual CORS header is set by on_response_prepare
+            # so it also reaches the client for streaming responses.
+            return await handler(request)
+
+        return cors_middleware
+
+    def _resolve_cors_origin(self, request):
+        """Resolve the Access-Control-Allow-Origin value for a request, or None."""
+        allow_origins = self.cors_allow_origins
+        if not allow_origins:
+            return None
+        if allow_origins == ["*"]:
+            return "*"
+        request_origin = request.headers.get("Origin")
+        if request_origin and request_origin in allow_origins:
+            return request_origin
+        return None
+
+    async def _apply_cors_headers(self, request, response):
+        """Attach CORS headers just before response headers are flushed.
+
+        Runs on the on_response_prepare signal so that streaming endpoints
+        (which call StreamResponse.prepare() and flush headers immediately)
+        also emit Access-Control-Allow-Origin.
+        """
+        origin = self._resolve_cors_origin(request)
+        if not origin:
+            return
+        response.headers["Access-Control-Allow-Origin"] = origin
+        if origin != "*":
+            existing_vary = response.headers.get("Vary")
+            response.headers["Vary"] = (
+                f"{existing_vary}, Origin" if existing_vary else "Origin"
+            )
 
     async def handle_dashboard(self, request):
         """Handle GET / and /dashboard requests to serve the dashboard.

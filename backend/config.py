@@ -551,6 +551,26 @@ class ConfigManager:
         """
         return self.config.get("api", {}).get("health_endpoint", "/health")
 
+    def get_cors_allow_origins(self):
+        """Get the list of CORS allowed origins for the API server.
+
+        Returns:
+            A list of allowed origins. The special value ["*"] allows any origin
+            (non-credentialed). An empty list disables CORS headers entirely.
+            Defaults to [] (CORS off): operators must opt in explicitly because
+            enabling CORS broadens the attack surface to any website loaded in
+            a user's browser. Prior releases emitted Access-Control-Allow-Origin
+            only on OPTIONS preflight, so cross-origin requests never actually
+            worked in practice and this default preserves that effective state.
+        """
+        api_config = self.config.get("api", {})
+        origins = api_config.get("cors_allow_origins", [])
+        if isinstance(origins, str):
+            origins = [origins]
+        if not isinstance(origins, list):
+            raise ValueError("api.cors_allow_origins must be a list of strings or a single string")
+        return [str(o) for o in origins]
+
     def get_runner_host(self, runner_name: str):
         """Get the host for a specific runner.
 

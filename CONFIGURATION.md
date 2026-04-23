@@ -155,6 +155,36 @@ FlexLLama supports configurable timeouts for long-running requests:
 
 **Note:** The server keepalive timeout is set to 60 minutes by default to support long-running model inference.
 
+## CORS Configuration
+
+By default FlexLLama does **not** emit CORS headers, so browser-based clients
+loaded from a different origin cannot call the API. This is the safe default:
+allowing cross-origin access means any website a user visits can script
+requests against their FlexLLama instance (which has no authentication).
+
+To opt in, set `api.cors_allow_origins` to a list of origins:
+
+```json
+{
+    "api": {
+        "host": "0.0.0.0",
+        "port": 8080,
+        "cors_allow_origins": ["http://localhost:5173", "https://my-chat-ui.example"]
+    }
+}
+```
+
+- `[]` (default): CORS disabled. Recommended when FlexLLama is only called
+  from same-origin pages or from non-browser clients.
+- `["*"]`: Allow any origin (non-credentialed). Convenient for local dev;
+  understand that any page in any browser on your network can then call
+  the API.
+- Explicit list: The request `Origin` header must match exactly; the server
+  reflects it and sets `Vary: Origin`. Preferred for production.
+
+`Access-Control-Allow-Credentials` is never set, so browser cookies are not
+forwarded cross-origin regardless of this setting.
+
 ## Configuration Options Reference
 
 ### Runner Options
