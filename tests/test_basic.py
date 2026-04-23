@@ -543,8 +543,8 @@ async def main():
             logger.info("Testing CORS headers")
             logger.info("=" * 60)
             if not await test_cors_headers(args.url, test_model, args.cors_origin):
-                logger.warning("CORS header test failed")
-
+                logger.error("CORS header test failed")
+                sys.exit(1)
         # Test concurrent requests across different runners (if multiple runners are active)
         logger.info("=" * 60)
         logger.info("Testing concurrent requests across runners")
