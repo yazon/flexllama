@@ -224,12 +224,15 @@ async def test_cors_headers(base_url, model, expected_origin):
                         expected_origin,
                     )
                     return False
-                if "authorization" not in allow_headers.lower():
-                    logger.error(
-                        "Preflight did not echo Authorization in Access-Control-Allow-Headers: %r",
-                        allow_headers,
-                    )
-                    return False
+                allow_headers_lower = allow_headers.lower()
+                for requested in ("authorization", "content-type"):
+                    if requested not in allow_headers_lower:
+                        logger.error(
+                            "Preflight did not echo %s in Access-Control-Allow-Headers: %r",
+                            requested,
+                            allow_headers,
+                        )
+                        return False
         except Exception as e:
             logger.error("Preflight request failed: %s", e)
             return False
