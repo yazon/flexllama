@@ -326,6 +326,10 @@ The `tests/` directory contains scripts for different testing purposes. All test
 ```bash
 # Run basic tests against the default URL (http://localhost:8080)
 python tests/test_basic.py
+
+# Additionally verify CORS response headers (requires
+# api.cors_allow_origins to be configured on the server)
+python tests/test_basic.py --cors-origin '*'
 ```
 
 **What it tests:**
@@ -333,6 +337,8 @@ python tests/test_basic.py
 - `/v1/models` and `/health` endpoints
 - `/v1/chat/completions` with both regular and streaming responses
 - Concurrent request handling
+- Optional: CORS headers on preflight, regular, and streaming responses
+  when invoked with `--cors-origin`
 
 #### All Models Test
 
