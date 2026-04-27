@@ -1,14 +1,20 @@
 // Configuration
 const CONFIG = {
   API_BASE_URL: window.FLEXLLAMA_CONFIG.HEALTH_ENDPOINT || "/health",
+  GPU_METRICS_URL: window.FLEXLLAMA_CONFIG.GPU_METRICS_ENDPOINT || "/v1/metrics/gpus",
   REFRESH_INTERVAL: 2000,
+  GPU_METRICS_REFRESH_INTERVAL: 2000,
   REQUEST_TIMEOUT: 5000,
 };
 
 // Global state
 let refreshInterval = null;
+let gpuMetricsInterval = null;
 let lastUpdateTime = null;
+let lastGpuMetricsTime = null;
 let operationStates = {};
+let gpuMetricsState = null;
+let gpuMetricsRateLimitedUntil = 0;
 
 // Status mapping
 const STATUS_MAP = {
@@ -63,7 +69,9 @@ function formatAutoUnloadStatus(timeoutSeconds, countdownSeconds) {
 document.addEventListener("DOMContentLoaded", function () {
   console.log("🦙 FlexLLama Dashboard initialized");
   startAutoRefresh();
-  fetchHealthData(); // Initial load
+  startGpuMetricsRefresh();
+  fetchHealthData();
+  fetchGpuMetrics();
 });
 
 // Start auto-refresh
@@ -108,6 +116,14 @@ async function fetchHealthData() {
     }
 
     const data = await response.json();
+    if (
+      !data ||
+      typeof data !== "object" ||
+      !Object.prototype.hasOwnProperty.call(data, "active_runners")
+    ) {
+      throw new Error("Unexpected /health response payload");
+    }
+
     updateDashboard(data);
     updateLastUpdatedTime();
     hideError();
@@ -121,8 +137,10 @@ async function fetchHealthData() {
 function updateDashboard(data) {
   console.log("Updating dashboard with data:", data);
 
-  const { active_runners, runner_current_models, runner_info, model_health } =
-    data;
+  const active_runners = data.active_runners || {};
+  const runner_current_models = data.runner_current_models || {};
+  const runner_info = data.runner_info || {};
+  const model_health = data.model_health || {};
 
   // Update runners section
   updateRunnersSection(
@@ -138,10 +156,10 @@ function updateDashboard(data) {
 
 // Update runners section
 function updateRunnersSection(
-  activeRunners,
-  runnerModels,
-  runnerInfo,
-  modelHealth,
+  activeRunners = {},
+  runnerModels = {},
+  runnerInfo = {},
+  modelHealth = {},
 ) {
   const container = document.getElementById("runnersContainer");
   container.innerHTML = "";
@@ -808,6 +826,269 @@ window.addEventListener("beforeunload", function () {
   stopAutoRefresh();
 });
 
+// Start GPU metrics auto-refresh
+function startGpuMetricsRefresh() {
+  if (gpuMetricsInterval) {
+    clearInterval(gpuMetricsInterval);
+  }
+  gpuMetricsInterval = setInterval(fetchGpuMetrics, CONFIG.GPU_METRICS_REFRESH_INTERVAL);
+  console.log(`GPU metrics auto-refresh started: every ${CONFIG.GPU_METRICS_REFRESH_INTERVAL}ms`);
+}
+
+// Stop GPU metrics auto-refresh
+function stopGpuMetricsRefresh() {
+  if (gpuMetricsInterval) {
+    clearInterval(gpuMetricsInterval);
+    gpuMetricsInterval = null;
+  }
+}
+
+// Fetch GPU metrics from API
+async function fetchGpuMetrics() {
+  if (Date.now() < gpuMetricsRateLimitedUntil) {
+    return;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONFIG.REQUEST_TIMEOUT);
+
+    const response = await fetch(CONFIG.GPU_METRICS_URL, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        "Cache-Control": "no-cache",
+      },
+    });
+
+    clearTimeout(timeoutId);
+
+    if (response.status === 429) {
+      const retryAfterHeader = response.headers.get("Retry-After");
+      const retryAfterSeconds = Math.max(1, parseInt(retryAfterHeader || "5", 10) || 5);
+      gpuMetricsRateLimitedUntil = Date.now() + retryAfterSeconds * 1000;
+
+      // Keep last successful cards visible to avoid flicker.
+      if (!gpuMetricsState || gpuMetricsState.status !== "available") {
+        updateGpuMetricsPanel({ status: "unavailable", reason: "rate_limited" });
+      }
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    gpuMetricsRateLimitedUntil = 0;
+    gpuMetricsState = data;
+    updateGpuMetricsPanel(data);
+    lastGpuMetricsTime = new Date();
+  } catch (error) {
+    console.error("Failed to fetch GPU metrics:", error);
+    updateGpuMetricsPanel({ status: "unavailable", reason: "fetch_error", collection_error: error.message });
+  }
+}
+
+// Update the GPU metrics panel
+function updateGpuMetricsPanel(data) {
+  const container = document.getElementById("gpuMetricsContainer");
+  if (!container) return;
+  container.innerHTML = "";
+
+  if (data.status === "available" && data.gpus && data.gpus.length > 0) {
+    const associations = data.runner_associations || {};
+    const gpuRunnerMap = buildGpuRunnerMap(associations);
+
+    data.gpus.forEach(function (gpu) {
+      const card = createGpuMetricCard(gpu, data.gpu_history || {}, gpuRunnerMap);
+      container.appendChild(card);
+    });
+  } else {
+    container.innerHTML = createGpuMetricsUnavailable(data);
+  }
+}
+
+// Build a map from GPU id to runner info
+function buildGpuRunnerMap(associations) {
+  const map = {};
+  Object.entries(associations).forEach(function (entry) {
+    var runnerName = entry[0];
+    var info = entry[1];
+    var gpuKeys = [];
+    if (Array.isArray(info.gpu_ids)) {
+      gpuKeys = info.gpu_ids;
+    } else if (Array.isArray(info.gpu_indices)) {
+      gpuKeys = info.gpu_indices.map(function (idx) {
+        return String(idx);
+      });
+    }
+
+    gpuKeys.forEach(function (gpuKey) {
+      if (!map[gpuKey]) map[gpuKey] = [];
+      map[gpuKey].push(runnerName);
+    }
+    );
+  });
+  return map;
+}
+
+// Create an unavailable state message
+function createGpuMetricsUnavailable(data) {
+  var reason = data.reason || "unknown";
+  var reasonText = {
+    unsupported_platform: "GPU metrics are not supported on this operating system.",
+    tool_not_found: "No supported GPU telemetry tool found. Install nvidia-smi and/or amd-smi.",
+    command_failed: "GPU telemetry command failed. Check driver/tool installation and GPU visibility.",
+    command_timeout: "amd-smi command timed out.",
+    parse_error: "Failed to parse amd-smi output.",
+    no_visible_gpus: "No visible GPUs detected. Ensure GPU devices are accessible.",
+    disabled_in_config: "GPU metrics collection is disabled in configuration.",
+    fetch_error: "Could not reach the GPU metrics endpoint.",
+    rate_limited: "GPU metrics request rate limited. The dashboard will retry shortly.",
+  };
+
+  var message = reasonText[reason] || "GPU metrics are currently unavailable.";
+  if (data.collection_error) {
+    message += " (" + sanitizeHTML(data.collection_error) + ")";
+  }
+
+  return '<div class="gpu-metrics-unavailable">' +
+    '<div class="unavailable-icon">&#9888;</div>' +
+    '<div class="unavailable-text">GPU metrics unavailable</div>' +
+    '<div class="unavailable-reason">' + message + '</div>' +
+    '</div>';
+}
+
+// Create a GPU metric card element
+function createGpuMetricCard(gpu, history, gpuRunnerMap) {
+  var idx = gpu.index;
+  var gpuKey = gpu.id ? String(gpu.id) : String(idx);
+  var name = gpu.name || ("GPU " + idx);
+  var vendor = gpu.vendor || "unknown";
+  var runners = gpuRunnerMap[gpuKey] || gpuRunnerMap[String(idx)] || [];
+
+  var card = document.createElement("div");
+  card.className = "gpu-metric-card";
+
+  var memUsed = gpu.memory_used_mb !== null && gpu.memory_used_mb !== undefined
+    ? formatMb(gpu.memory_used_mb) : "--";
+  var memTotal = gpu.memory_total_mb !== null && gpu.memory_total_mb !== undefined
+    ? formatMb(gpu.memory_total_mb) : "--";
+  var memPercent = (gpu.memory_used_mb != null && gpu.memory_total_mb != null && gpu.memory_total_mb > 0)
+    ? Math.round((gpu.memory_used_mb / gpu.memory_total_mb) * 100) : null;
+  var util = gpu.utilization_gpu_percent !== null && gpu.utilization_gpu_percent !== undefined
+    ? Math.round(gpu.utilization_gpu_percent) + "%" : "--";
+  var temp = gpu.temperature_c !== null && gpu.temperature_c !== undefined
+    ? Math.round(gpu.temperature_c) + "°C" : "--";
+
+  var historyKey = gpuKey;
+  var memHistory = (history[historyKey] || {}).memory_used_mb || [];
+  var utilHistory = (history[historyKey] || {}).utilization_gpu_percent || [];
+  var tempHistory = (history[historyKey] || {}).temperature_c || [];
+
+  card.innerHTML =
+    '<div class="gpu-card-header">' +
+      '<h3 class="gpu-name">' + sanitizeHTML(name) + '</h3>' +
+      '<span class="gpu-index">' + sanitizeHTML(vendor.toUpperCase()) + ' GPU ' + idx + '</span>' +
+    '</div>' +
+    '<div class="gpu-metrics-row">' +
+      '<div class="gpu-metric-chip' + (memPercent !== null && memPercent > 90 ? ' metric-warning' : '') + '">' +
+        '<span class="metric-label">VRAM</span>' +
+        '<span class="metric-value">' + memUsed + ' / ' + memTotal + '</span>' +
+        (memPercent !== null ? '<span class="metric-percent">' + memPercent + '%</span>' : '') +
+      '</div>' +
+      '<div class="gpu-metric-chip">' +
+        '<span class="metric-label">Util</span>' +
+        '<span class="metric-value">' + util + '</span>' +
+      '</div>' +
+      '<div class="gpu-metric-chip' + (gpu.temperature_c !== null && gpu.temperature_c > 85 ? ' metric-warning' : '') + '">' +
+        '<span class="metric-label">Temp</span>' +
+        '<span class="metric-value">' + temp + '</span>' +
+      '</div>' +
+    '</div>' +
+    '<div class="gpu-sparklines">' +
+      '<div class="sparkline-group">' +
+        '<span class="sparkline-label">VRAM</span>' +
+        '<div class="sparkline-container">' + renderSparkline(memHistory, "#64ffda") + '</div>' +
+      '</div>' +
+      '<div class="sparkline-group">' +
+        '<span class="sparkline-label">Util</span>' +
+        '<div class="sparkline-container">' + renderSparkline(utilHistory, "#ffb74d") + '</div>' +
+      '</div>' +
+      '<div class="sparkline-group">' +
+        '<span class="sparkline-label">Temp</span>' +
+        '<div class="sparkline-container">' + renderSparkline(tempHistory, "#e57373") + '</div>' +
+      '</div>' +
+    '</div>' +
+    (runners.length > 0
+      ? '<div class="gpu-runners"><span class="gpu-runners-label">Runners:</span> ' +
+        runners.map(function (r) { return sanitizeHTML(r); }).join(", ") + '</div>'
+      : '') +
+    (gpu.power_w !== null && gpu.power_w !== undefined
+      ? '<div class="gpu-extra">Power: ' + gpu.power_w.toFixed(1) + 'W</div>'
+      : '');
+
+  return card;
+}
+
+// Render an inline SVG sparkline from an array of numeric values
+function renderSparkline(values, color) {
+  if (!values || values.length < 2) {
+    return '<svg class="sparkline" viewBox="0 0 120 24"><line x1="0" y1="12" x2="120" y2="12" stroke="' + color + '" stroke-opacity="0.2" stroke-width="1"/></svg>';
+  }
+
+  var filtered = values.filter(function (v) { return v !== null && v !== undefined; });
+  if (filtered.length < 2) {
+    return '<svg class="sparkline" viewBox="0 0 120 24"><line x1="0" y1="12" x2="120" y2="12" stroke="' + color + '" stroke-opacity="0.2" stroke-width="1"/></svg>';
+  }
+
+  var min = Math.min.apply(null, filtered);
+  var max = Math.max.apply(null, filtered);
+  var range = max - min;
+  if (range === 0) range = 1;
+
+  var w = 120;
+  var h = 24;
+  var pad = 2;
+  var step = (w - pad * 2) / (filtered.length - 1);
+
+  var points = filtered.map(function (v, i) {
+    var x = pad + i * step;
+    var y = h - pad - ((v - min) / range) * (h - pad * 2);
+    return x.toFixed(1) + "," + y.toFixed(1);
+  });
+
+  var pathD = "M" + points.join(" L");
+
+  return '<svg class="sparkline" viewBox="0 0 ' + w + ' ' + h + '">' +
+    '<path d="' + pathD + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>' +
+    '</svg>';
+}
+
+// Format megabytes to a human-readable string
+function formatMb(mb) {
+  if (mb === null || mb === undefined) return "--";
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
+  return Math.round(mb) + " MB";
+}
+
+// Cleanup on page unload
+window.addEventListener("beforeunload", function () {
+  stopAutoRefresh();
+  stopGpuMetricsRefresh();
+});
+
+// Handle visibility changes for GPU metrics too
+document.addEventListener("visibilitychange", function () {
+  if (document.hidden) {
+    stopGpuMetricsRefresh();
+  } else {
+    startGpuMetricsRefresh();
+    fetchGpuMetrics();
+  }
+});
+
 // Export functions for debugging
 window.llama_dashboard = {
   fetchHealthData,
@@ -818,5 +1099,6 @@ window.llama_dashboard = {
   startRunner,
   stopRunner,
   restartRunner,
+  fetchGpuMetrics,
   config: CONFIG,
 };

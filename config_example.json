@@ -5,6 +5,16 @@
         "port": 8080,
         "health_endpoint": "/health"
     },
+    "metrics": {
+        "gpu": {
+            "enabled": true,
+            "vendors": ["nvidia", "amd"],
+            "poll_interval_seconds": 2,
+            "history_points": 60,
+            "command_timeout_seconds": 3,
+            "rate_limit_requests_per_minute": 120
+        }
+    },
     "request_timeout_seconds": 1800,
     "streaming_timeout_seconds": 0,
     "retry_config": {

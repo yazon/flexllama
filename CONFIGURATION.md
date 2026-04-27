@@ -185,6 +185,61 @@ To opt in, set `api.cors_allow_origins` to a list of origins:
 `Access-Control-Allow-Credentials` is never set, so browser cookies are not
 forwarded cross-origin regardless of this setting.
 
+## GPU Metrics Configuration
+
+FlexLLama can collect real-time GPU telemetry and display it in the dashboard.
+The feature supports both NVIDIA and AMD tools when present:
+
+- `nvidia-smi` for NVIDIA GPUs (Linux and Windows)
+- `amd-smi` for AMD GPUs (Linux)
+
+```json
+{
+    "metrics": {
+        "gpu": {
+            "enabled": true,
+            "vendors": ["nvidia", "amd"],
+            "poll_interval_seconds": 2,
+            "history_points": 60,
+            "command_timeout_seconds": 3,
+            "rate_limit_requests_per_minute": 120
+        }
+    }
+}
+```
+
+**GPU Metrics Options:**
+
+- `enabled`: Enable or disable GPU metrics collection (default: `true`). When disabled, the dashboard shows "GPU metrics unavailable".
+- `vendors`: Which collectors to try (default: `["nvidia", "amd"]`). Supported values: `"nvidia"`, `"amd"`.
+- `poll_interval_seconds`: How often to poll vendor tools for new metrics (default: `2`).
+- `history_points`: Number of historical data points to retain per metric for sparkline rendering (default: `60`).
+- `command_timeout_seconds`: Subprocess timeout for telemetry commands in seconds (default: `3`).
+- `rate_limit_requests_per_minute`: Per-IP rate limit for the `/v1/metrics/gpus` endpoint (default: `120`).
+
+**Platform Support:**
+
+| Platform | GPU Metrics Support |
+|----------|-------------------|
+| Linux with `nvidia-smi` and/or `amd-smi` | Fully supported |
+| Windows with `nvidia-smi` | Supported (NVIDIA) |
+| Windows without `nvidia-smi` | Unavailable (tool not found) |
+| macOS | Unavailable (unsupported platform) |
+| Docker without GPU visibility | Unavailable (no visible GPUs) |
+
+**Requirements:**
+
+- For NVIDIA metrics: `nvidia-smi` installed and available in `PATH`
+- For AMD metrics: `amd-smi` installed and available in `PATH` (part of ROCm)
+- GPU devices accessible to the FlexLLama process
+
+**Important Notes:**
+
+- GPU metrics collection never blocks server startup or request handling.
+- If no supported vendor tool is installed or visible, the dashboard displays a clear "GPU metrics unavailable" message.
+- Runner-to-GPU associations are based on model configuration (`main_gpu`, `tensor_split`) and are labeled as advisory.
+- The `/v1/metrics/gpus` endpoint is rate-limited to prevent abuse.
+
 ## Configuration Options Reference
 
 ### Runner Options
@@ -253,4 +308,3 @@ python backend/config.py config.json
 ```
 
 A successful validation will print a confirmation message. If there are errors, they will be displayed with details on how to fix them.
-

@@ -16,6 +16,7 @@ from aiohttp import web
 from pathlib import Path
 import importlib.resources
 from .runner import HealthStatus, HealthMessages
+from .gpu_metrics import GPUMetricsCollector, RateLimiter, build_runner_gpu_associations
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
@@ -67,6 +68,13 @@ class APIServer:
         # Set keepalive timeout to 60 minutes for long-running requests
         self.keepalive_timeout = 3600  # 60 minutes
 
+        gpu_metrics_config = config_manager.get_gpu_metrics_config()
+        self.gpu_metrics_collector = GPUMetricsCollector(gpu_metrics_config)
+        self.gpu_metrics_limiter = RateLimiter(
+            gpu_metrics_config.get("rate_limit_requests_per_minute", 120)
+        )
+        self.gpu_metrics_endpoint = "/v1/metrics/gpus"
+
         self._setup_routes()
         self.runner = None
         self.site = None
@@ -107,6 +115,7 @@ class APIServer:
             web.post("/v1/runners/{runner_name}/stop", self.handle_runner_stop),
             web.post("/v1/runners/{runner_name}/restart", self.handle_runner_restart),
             web.get("/v1/runners/status", self.handle_runners_status),
+            web.get(self.gpu_metrics_endpoint, self.handle_gpu_metrics),
             # Dashboard routes
             web.get("/", self.handle_dashboard),
             web.get("/dashboard", self.handle_dashboard),
@@ -144,6 +153,9 @@ class APIServer:
             # Start auto-unload watchdog
             await self.runner_manager.start_auto_unload_watchdog()
 
+            # Start GPU metrics collector
+            await self.gpu_metrics_collector.start()
+
             logger.info("API server started successfully")
             return True
 
@@ -160,6 +172,9 @@ class APIServer:
         try:
             # Stop auto-unload watchdog first
             await self.runner_manager.stop_auto_unload_watchdog()
+
+            # Stop GPU metrics collector
+            await self.gpu_metrics_collector.stop()
 
             if self.runner:
                 logger.info("Stopping API server")
@@ -223,6 +238,7 @@ class APIServer:
         allowed origin read authenticated responses. Operators who need
         credentialed CORS can extend this later with an explicit config flag.
         """
+
         @web.middleware
         async def cors_middleware(request, handler):
             if request.method == "OPTIONS":
@@ -293,6 +309,9 @@ class APIServer:
                     content = f.read()
                 # Inject the health endpoint into the dashboard
                 content = content.replace("__HEALTH_ENDPOINT__", self.health_endpoint)
+                content = content.replace(
+                    "__GPU_METRICS_ENDPOINT__", self.gpu_metrics_endpoint
+                )
                 return web.Response(text=content, content_type="text/html")
             else:
                 return web.Response(
@@ -736,6 +755,54 @@ class APIServer:
                 {
                     "success": False,
                     "error": {"message": f"Failed to get runner status: {str(e)}"},
+                },
+                status=500,
+            )
+
+    async def handle_gpu_metrics(self, request):
+        """Handle GET /v1/metrics/gpus requests.
+
+        Returns normalized GPU telemetry with bounded history and advisory
+        runner-to-GPU associations.  The endpoint is rate-limited per remote
+        IP to prevent abuse.
+
+        Args:
+            request: The request.
+
+        Returns:
+            The response.
+        """
+        remote = request.remote or "unknown"
+        allowed, retry_after = self.gpu_metrics_limiter.check(remote)
+        if not allowed:
+            return web.json_response(
+                {
+                    "error": {
+                        "message": "Rate limit exceeded for GPU metrics endpoint",
+                        "type": "rate_limit_error",
+                    }
+                },
+                status=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        try:
+            snapshot = self.gpu_metrics_collector.get_snapshot()
+            associations = build_runner_gpu_associations(
+                self.config_manager, snapshot.get("gpus", [])
+            )
+            snapshot["runner_associations"] = associations
+            return web.json_response(snapshot)
+
+        except Exception as e:
+            logger.error(f"Error getting GPU metrics: {e}")
+            return web.json_response(
+                {
+                    "status": "unavailable",
+                    "reason": "internal_error",
+                    "error": {"message": f"Failed to get GPU metrics: {str(e)}"},
+                    "gpus": [],
+                    "gpu_history": {},
                 },
                 status=500,
             )

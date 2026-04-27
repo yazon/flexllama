@@ -700,4 +700,207 @@ h2 {
     0% { opacity: 1; }
     50% { opacity: 0.6; }
     100% { opacity: 1; }
+}
+
+/* GPU Metrics Section */
+.gpu-metrics-section {
+    margin-bottom: 50px;
+}
+
+.gpu-metrics-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    gap: 25px;
+}
+
+.gpu-metric-card {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 24px;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.gpu-metric-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #e57373, #ffb74d);
+    opacity: 0.7;
+}
+
+.gpu-metric-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.gpu-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.gpu-name {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #ffb74d;
+}
+
+.gpu-index {
+    font-size: 0.85rem;
+    color: #78909c;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2px 10px;
+    border-radius: 12px;
+}
+
+.gpu-metrics-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.gpu-metric-chip {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    min-width: 80px;
+}
+
+.gpu-metric-chip.metric-warning {
+    background: rgba(229, 115, 115, 0.15);
+    border: 1px solid rgba(229, 115, 115, 0.3);
+}
+
+.metric-label {
+    font-size: 0.7rem;
+    color: #78909c;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.metric-value {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #e8e8e8;
+}
+
+.metric-percent {
+    font-size: 0.75rem;
+    color: #ffb74d;
+    margin-top: 2px;
+}
+
+.gpu-sparklines {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.sparkline-group {
+    flex: 1;
+    min-width: 0;
+}
+
+.sparkline-label {
+    display: block;
+    font-size: 0.7rem;
+    color: #78909c;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.sparkline-container {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+    padding: 2px;
+    overflow: hidden;
+}
+
+.sparkline {
+    display: block;
+    width: 100%;
+    height: 24px;
+}
+
+.gpu-runners {
+    font-size: 0.8rem;
+    color: #b0bec5;
+    padding: 8px 0 0 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.gpu-runners-label {
+    color: #78909c;
+}
+
+.gpu-extra {
+    font-size: 0.75rem;
+    color: #78909c;
+    margin-top: 4px;
+}
+
+/* GPU Metrics Unavailable */
+.gpu-metrics-unavailable {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 40px 24px;
+    text-align: center;
+    color: #78909c;
+}
+
+.unavailable-icon {
+    font-size: 2.5rem;
+    margin-bottom: 12px;
+    opacity: 0.5;
+}
+
+.unavailable-text {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #b0bec5;
+    margin-bottom: 8px;
+}
+
+.unavailable-reason {
+    font-size: 0.85rem;
+    color: #78909c;
+    line-height: 1.5;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+/* Responsive GPU metrics */
+@media (max-width: 768px) {
+    .gpu-metrics-container {
+        grid-template-columns: 1fr;
+    }
+
+    .gpu-metrics-row {
+        flex-direction: column;
+    }
+
+    .gpu-metric-chip {
+        flex-direction: row;
+        justify-content: space-between;
+        min-width: unset;
+    }
+
+    .gpu-sparklines {
+        flex-direction: column;
+    }
 } 

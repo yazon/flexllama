@@ -79,6 +79,9 @@ class ConfigManager:
                 "api",
                 "auto_start_runners",
                 "retry_config",
+                "metrics",
+                "request_timeout_seconds",
+                "streaming_timeout_seconds",
             ] and isinstance(value, dict):
                 runner_names.add(key)
 
@@ -91,6 +94,9 @@ class ConfigManager:
 
         # Validate retry configuration
         self._validate_retry_config()
+
+        # Validate metrics configuration
+        self._validate_metrics_config()
 
         # Validate auto_start_runners if present
         if "auto_start_runners" in self.config:
@@ -180,6 +186,97 @@ class ConfigManager:
         if retry_config["max_delay_seconds"] < retry_config["base_delay_seconds"]:
             raise ValueError(
                 "max_delay_seconds must be greater than or equal to base_delay_seconds"
+            )
+
+    def _validate_metrics_config(self):
+        """Validate metrics configuration with sensible defaults."""
+        if "metrics" not in self.config:
+            self.config["metrics"] = {
+                "gpu": {
+                    "enabled": True,
+                    "vendors": ["nvidia", "amd"],
+                    "poll_interval_seconds": 2,
+                    "history_points": 60,
+                    "command_timeout_seconds": 3,
+                    "rate_limit_requests_per_minute": 120,
+                }
+            }
+            return
+
+        metrics = self.config["metrics"]
+        if not isinstance(metrics, dict):
+            raise ValueError("metrics must be a dictionary")
+
+        if "gpu" not in metrics:
+            metrics["gpu"] = {
+                "enabled": True,
+                "vendors": ["nvidia", "amd"],
+                "poll_interval_seconds": 2,
+                "history_points": 60,
+                "command_timeout_seconds": 3,
+                "rate_limit_requests_per_minute": 120,
+            }
+            return
+
+        gpu = metrics["gpu"]
+        if not isinstance(gpu, dict):
+            raise ValueError("metrics.gpu must be a dictionary")
+
+        if "enabled" not in gpu:
+            gpu["enabled"] = True
+        elif not isinstance(gpu["enabled"], bool):
+            raise ValueError("metrics.gpu.enabled must be a boolean")
+
+        if "vendors" not in gpu:
+            gpu["vendors"] = ["nvidia", "amd"]
+        elif not isinstance(gpu["vendors"], list):
+            raise ValueError("metrics.gpu.vendors must be a list")
+        else:
+            valid_vendors = {"nvidia", "amd"}
+            normalized_vendors = []
+            for vendor in gpu["vendors"]:
+                if not isinstance(vendor, str):
+                    raise ValueError("metrics.gpu.vendors must contain only strings")
+                v = vendor.strip().lower()
+                if v not in valid_vendors:
+                    raise ValueError("metrics.gpu.vendors supports only: nvidia, amd")
+                if v not in normalized_vendors:
+                    normalized_vendors.append(v)
+            gpu["vendors"] = normalized_vendors
+
+        if "poll_interval_seconds" not in gpu:
+            gpu["poll_interval_seconds"] = 2
+        elif (
+            not isinstance(gpu["poll_interval_seconds"], int)
+            or gpu["poll_interval_seconds"] < 1
+        ):
+            raise ValueError(
+                "metrics.gpu.poll_interval_seconds must be a positive integer"
+            )
+
+        if "history_points" not in gpu:
+            gpu["history_points"] = 60
+        elif not isinstance(gpu["history_points"], int) or gpu["history_points"] < 1:
+            raise ValueError("metrics.gpu.history_points must be a positive integer")
+
+        if "command_timeout_seconds" not in gpu:
+            gpu["command_timeout_seconds"] = 3
+        elif (
+            not isinstance(gpu["command_timeout_seconds"], int)
+            or gpu["command_timeout_seconds"] < 1
+        ):
+            raise ValueError(
+                "metrics.gpu.command_timeout_seconds must be a positive integer"
+            )
+
+        if "rate_limit_requests_per_minute" not in gpu:
+            gpu["rate_limit_requests_per_minute"] = 120
+        elif (
+            not isinstance(gpu["rate_limit_requests_per_minute"], int)
+            or gpu["rate_limit_requests_per_minute"] < 1
+        ):
+            raise ValueError(
+                "metrics.gpu.rate_limit_requests_per_minute must be a positive integer"
             )
 
     def _validate_model_config(self, model, index: int, runner_names: set):
@@ -497,6 +594,9 @@ class ConfigManager:
                 "api",
                 "auto_start_runners",
                 "retry_config",
+                "metrics",
+                "request_timeout_seconds",
+                "streaming_timeout_seconds",
             ]
             and isinstance(self.config[key], dict)
         ]
@@ -568,7 +668,9 @@ class ConfigManager:
         if isinstance(origins, str):
             origins = [origins]
         if not isinstance(origins, list):
-            raise ValueError("api.cors_allow_origins must be a list of strings or a single string")
+            raise ValueError(
+                "api.cors_allow_origins must be a list of strings or a single string"
+            )
         return [str(o) for o in origins]
 
     def get_runner_host(self, runner_name: str):
@@ -674,6 +776,24 @@ class ConfigManager:
             Set to 0 or None to disable timeout for streaming requests.
         """
         return self.config.get("streaming_timeout_seconds", 3600)
+
+    def get_gpu_metrics_config(self):
+        """Get the GPU metrics configuration.
+
+        Returns:
+            The GPU metrics configuration dictionary with defaults applied.
+        """
+        return self.config.get("metrics", {}).get(
+            "gpu",
+            {
+                "enabled": True,
+                "vendors": ["nvidia", "amd"],
+                "poll_interval_seconds": 2,
+                "history_points": 60,
+                "command_timeout_seconds": 3,
+                "rate_limit_requests_per_minute": 120,
+            },
+        )
 
 
 if __name__ == "__main__":

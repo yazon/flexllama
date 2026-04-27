@@ -8,7 +8,8 @@
     <link rel="stylesheet" href="frontend/styles.css">
     <script>
         window.FLEXLLAMA_CONFIG = {
-            HEALTH_ENDPOINT: "__HEALTH_ENDPOINT__"
+            HEALTH_ENDPOINT: "__HEALTH_ENDPOINT__",
+            GPU_METRICS_ENDPOINT: "__GPU_METRICS_ENDPOINT__"
         };
     </script>
 </head>
@@ -33,6 +34,14 @@
                 <h2>Active Runners</h2>
                 <div id="runnersContainer" class="runners-container">
                     <!-- Runner cards are dynamically generated here -->
+                </div>
+            </section>
+
+            <!-- GPU Metrics Section -->
+            <section class="gpu-metrics-section">
+                <h2>GPU Metrics</h2>
+                <div id="gpuMetricsContainer" class="gpu-metrics-container">
+                    <!-- GPU metric cards are dynamically generated here -->
                 </div>
             </section>
 
