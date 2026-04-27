@@ -201,7 +201,9 @@ async def test_cors_headers(base_url, model, expected_origin):
         True if all three checks pass, False otherwise.
     """
     logger.info("Testing CORS headers (expected origin: %s)", expected_origin)
-    client_origin = "http://flexllama-test.invalid" if expected_origin == "*" else expected_origin
+    client_origin = (
+        "http://flexllama-test.invalid" if expected_origin == "*" else expected_origin
+    )
     timeout = aiohttp.ClientTimeout(total=30)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
