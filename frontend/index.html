@@ -1,62 +1,84 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <base href="/">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
     <title>FlexLLama Status Dashboard</title>
-    <link rel="stylesheet" href="frontend/styles.css">
+    <link rel="stylesheet" href="frontend/styles.css" />
     <script>
-        window.FLEXLLAMA_CONFIG = {
-            HEALTH_ENDPOINT: "__HEALTH_ENDPOINT__"
-        };
+      window.FLEXLLAMA_CONFIG = {
+        HEALTH_ENDPOINT: "__HEALTH_ENDPOINT__",
+        GPU_METRICS_ENDPOINT: "__GPU_METRICS_ENDPOINT__",
+        THROUGHPUT_METRICS_ENDPOINT: "__THROUGHPUT_METRICS_ENDPOINT__",
+      };
     </script>
-</head>
-<body>
+  </head>
+  <body>
     <div class="container">
-        <header>
-            <h1>🦙 FlexLLama Status Dashboard</h1>
-            <div class="refresh-indicator">
-                <div class="pulse"></div>
-                <span>Auto-refresh: 2s</span>
-            </div>
-        </header>
-
-        <main>
-            <!-- Last Updated -->
-            <div class="last-updated">
-                <span id="lastUpdated">Never</span>
-            </div>
-
-            <!-- Runners Section -->
-            <section class="runners-section">
-                <h2>Active Runners</h2>
-                <div id="runnersContainer" class="runners-container">
-                    <!-- Runner cards are dynamically generated here -->
-                </div>
-            </section>
-
-            <!-- Available Models Section -->
-            <section class="models-section">
-                <h2>Available Models</h2>
-                <div class="models-card">
-                    <div class="card-header">
-                        <h3>📋 All Models Overview</h3>
-                    </div>
-                    <div id="modelsContainer" class="models-container">
-                        <!-- Model status items are dynamically generated here -->
-                    </div>
-                </div>
-            </section>
-        </main>
-
-        <!-- Error Toast -->
-        <div id="errorToast" class="error-toast hidden">
-            <span id="errorMessage"></span>
-            <button onclick="hideError()">×</button>
+      <header>
+        <h1>🦙 FlexLLama Status Dashboard</h1>
+        <div class="refresh-indicator">
+          <div class="pulse"></div>
+          <span>Auto-refresh: 2s</span>
         </div>
+      </header>
+
+      <main>
+        <!-- Last Updated -->
+        <div class="last-updated">
+          <span id="lastUpdated">Never</span>
+        </div>
+
+        <!-- Runners Section -->
+        <section class="runners-section">
+          <h2>Active Runners</h2>
+          <div id="runnersContainer" class="runners-container">
+            <!-- Runner cards are dynamically generated here -->
+          </div>
+        </section>
+
+        <!-- GPU Metrics Section -->
+        <section class="gpu-metrics-section">
+          <h2>GPU Metrics</h2>
+          <div id="gpuMetricsContainer" class="gpu-metrics-container">
+            <!-- GPU metric cards are dynamically generated here -->
+          </div>
+        </section>
+
+        <!-- Token Throughput Section -->
+        <section class="throughput-section">
+          <h2>Token Throughput</h2>
+          <div id="throughputContainer" class="throughput-container">
+            <!-- Throughput charts are dynamically generated here -->
+          </div>
+        </section>
+
+        <!-- Available Models Section -->
+        <section class="models-section">
+          <h2>Available Models</h2>
+          <div class="models-card">
+            <div class="card-header">
+              <h3>📋 All Models Overview</h3>
+            </div>
+            <div id="modelsContainer" class="models-container">
+              <!-- Model status items are dynamically generated here -->
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- Error Toast -->
+      <div id="errorToast" class="error-toast hidden">
+        <span id="errorMessage"></span>
+        <button onclick="hideError()">×</button>
+      </div>
     </div>
 
+    <script src="frontend/vendor/chart.min.js"></script>
     <script src="frontend/script.js"></script>
-</body>
-</html> 
+    <script src="frontend/dashboard-runners.js"></script>
+    <script src="frontend/dashboard-gpu.js"></script>
+    <script src="frontend/dashboard-throughput.js"></script>
+  </body>
+</html>

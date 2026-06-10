@@ -79,6 +79,10 @@ class ConfigManager:
                 "api",
                 "auto_start_runners",
                 "retry_config",
+                "metrics",
+                "mcp",
+                "request_timeout_seconds",
+                "streaming_timeout_seconds",
             ] and isinstance(value, dict):
                 runner_names.add(key)
 
@@ -91,6 +95,12 @@ class ConfigManager:
 
         # Validate retry configuration
         self._validate_retry_config()
+
+        # Validate metrics configuration
+        self._validate_metrics_config()
+
+        # Validate MCP proxy configuration
+        self._validate_mcp_config()
 
         # Validate auto_start_runners if present
         if "auto_start_runners" in self.config:
@@ -182,6 +192,229 @@ class ConfigManager:
                 "max_delay_seconds must be greater than or equal to base_delay_seconds"
             )
 
+    def _validate_metrics_config(self):
+        """Validate metrics configuration with sensible defaults.
+
+        Seeds and validates both the ``gpu`` sub-block (polled GPU telemetry)
+        and the ``throughput`` sub-block (event-driven token throughput). Both
+        are optional: when ``metrics`` or either sub-block is absent, safe
+        defaults are injected so behavior is identical to before.
+        """
+        if "metrics" not in self.config:
+            self.config["metrics"] = {
+                "gpu": {
+                    "enabled": True,
+                    "vendors": ["nvidia", "amd"],
+                    "poll_interval_seconds": 2,
+                    "history_points": 60,
+                    "command_timeout_seconds": 3,
+                    "rate_limit_requests_per_minute": 120,
+                },
+                "throughput": {
+                    "enabled": True,
+                    "history_points": 60,
+                    "rate_limit_requests_per_minute": 120,
+                },
+            }
+            return
+
+        metrics = self.config["metrics"]
+        if not isinstance(metrics, dict):
+            raise ValueError("metrics must be a dictionary")
+
+        if "gpu" not in metrics:
+            metrics["gpu"] = {
+                "enabled": True,
+                "vendors": ["nvidia", "amd"],
+                "poll_interval_seconds": 2,
+                "history_points": 60,
+                "command_timeout_seconds": 3,
+                "rate_limit_requests_per_minute": 120,
+            }
+        else:
+            self._validate_gpu_metrics_config(metrics["gpu"])
+
+        self._validate_throughput_metrics_config(metrics)
+
+    def _validate_gpu_metrics_config(self, gpu):
+        """Validate the metrics.gpu sub-block with sensible defaults.
+
+        Args:
+            gpu: The metrics.gpu configuration dictionary.
+
+        Raises:
+            ValueError: If the GPU metrics configuration is invalid.
+        """
+        if not isinstance(gpu, dict):
+            raise ValueError("metrics.gpu must be a dictionary")
+
+        if "enabled" not in gpu:
+            gpu["enabled"] = True
+        elif not isinstance(gpu["enabled"], bool):
+            raise ValueError("metrics.gpu.enabled must be a boolean")
+
+        if "vendors" not in gpu:
+            gpu["vendors"] = ["nvidia", "amd"]
+        elif not isinstance(gpu["vendors"], list):
+            raise ValueError("metrics.gpu.vendors must be a list")
+        else:
+            valid_vendors = {"nvidia", "amd"}
+            normalized_vendors = []
+            for vendor in gpu["vendors"]:
+                if not isinstance(vendor, str):
+                    raise ValueError("metrics.gpu.vendors must contain only strings")
+                v = vendor.strip().lower()
+                if v not in valid_vendors:
+                    raise ValueError("metrics.gpu.vendors supports only: nvidia, amd")
+                if v not in normalized_vendors:
+                    normalized_vendors.append(v)
+            gpu["vendors"] = normalized_vendors
+
+        if "poll_interval_seconds" not in gpu:
+            gpu["poll_interval_seconds"] = 2
+        elif (
+            not isinstance(gpu["poll_interval_seconds"], int)
+            or gpu["poll_interval_seconds"] < 1
+        ):
+            raise ValueError(
+                "metrics.gpu.poll_interval_seconds must be a positive integer"
+            )
+
+        if "history_points" not in gpu:
+            gpu["history_points"] = 60
+        elif not isinstance(gpu["history_points"], int) or gpu["history_points"] < 1:
+            raise ValueError("metrics.gpu.history_points must be a positive integer")
+
+        if "command_timeout_seconds" not in gpu:
+            gpu["command_timeout_seconds"] = 3
+        elif (
+            not isinstance(gpu["command_timeout_seconds"], int)
+            or gpu["command_timeout_seconds"] < 1
+        ):
+            raise ValueError(
+                "metrics.gpu.command_timeout_seconds must be a positive integer"
+            )
+
+        if "rate_limit_requests_per_minute" not in gpu:
+            gpu["rate_limit_requests_per_minute"] = 120
+        elif (
+            not isinstance(gpu["rate_limit_requests_per_minute"], int)
+            or gpu["rate_limit_requests_per_minute"] < 1
+        ):
+            raise ValueError(
+                "metrics.gpu.rate_limit_requests_per_minute must be a positive integer"
+            )
+
+    def _validate_throughput_metrics_config(self, metrics):
+        """Validate the optional metrics.throughput sub-block with defaults.
+
+        The throughput sub-block is a sibling of metrics.gpu and is entirely
+        optional. When absent, safe defaults are injected so token throughput
+        tracking is enabled with backward-compatible behavior. When present,
+        each field is validated; throughput tracking is event-driven and never
+        polls, so there is no poll interval or command timeout to configure.
+
+        Args:
+            metrics: The metrics configuration dictionary.
+
+        Raises:
+            ValueError: If the throughput metrics configuration is invalid.
+        """
+        if "throughput" not in metrics:
+            metrics["throughput"] = {
+                "enabled": True,
+                "history_points": 60,
+                "rate_limit_requests_per_minute": 120,
+            }
+            return
+
+        throughput = metrics["throughput"]
+        if not isinstance(throughput, dict):
+            raise ValueError("metrics.throughput must be a dictionary")
+
+        if "enabled" not in throughput:
+            throughput["enabled"] = True
+        elif not isinstance(throughput["enabled"], bool):
+            raise ValueError("metrics.throughput.enabled must be a boolean")
+
+        if "history_points" not in throughput:
+            throughput["history_points"] = 60
+        elif (
+            not isinstance(throughput["history_points"], int)
+            or throughput["history_points"] < 1
+        ):
+            raise ValueError(
+                "metrics.throughput.history_points must be a positive integer"
+            )
+
+        if "rate_limit_requests_per_minute" not in throughput:
+            throughput["rate_limit_requests_per_minute"] = 120
+        elif (
+            not isinstance(throughput["rate_limit_requests_per_minute"], int)
+            or throughput["rate_limit_requests_per_minute"] < 1
+        ):
+            raise ValueError(
+                "metrics.throughput.rate_limit_requests_per_minute must be a positive integer"
+            )
+
+    def _validate_mcp_config(self) -> None:
+        """Validate the optional MCP proxy configuration block.
+
+        The block is entirely optional. When absent, no defaults are written to
+        self.config (get_mcp_config supplies them), so configs without an "mcp"
+        key behave exactly as before. When present, it must be a dictionary with
+        an optional boolean "enabled" (default False), a string "endpoint"
+        (default "/v1/mcp", the public FlexLLama path) and a string
+        "upstream_path" (default "/mcp", the path on the target llama-server the
+        JSON-RPC request is forwarded to).
+
+        Raises:
+            ValueError: If the MCP configuration is present but invalid.
+        """
+        if "mcp" not in self.config:
+            return
+
+        mcp = self.config["mcp"]
+        if not isinstance(mcp, dict):
+            raise ValueError("mcp must be a dictionary")
+
+        if "enabled" not in mcp:
+            mcp["enabled"] = False
+        elif not isinstance(mcp["enabled"], bool):
+            raise ValueError("mcp.enabled must be a boolean")
+
+        if "endpoint" not in mcp:
+            mcp["endpoint"] = "/v1/mcp"
+        elif not isinstance(mcp["endpoint"], str):
+            raise ValueError("mcp.endpoint must be a string")
+
+        if "upstream_path" not in mcp:
+            mcp["upstream_path"] = "/mcp"
+        elif not isinstance(mcp["upstream_path"], str):
+            raise ValueError("mcp.upstream_path must be a string")
+
+        ep = mcp["endpoint"].strip()
+        if not ep or not ep.startswith("/"):
+            raise ValueError("mcp.endpoint must be a non-empty path starting with '/'")
+        mcp["endpoint"] = ep
+
+        up = mcp["upstream_path"].strip()
+        if not up or not up.startswith("/"):
+            raise ValueError(
+                "mcp.upstream_path must be a non-empty path starting with '/'"
+            )
+        mcp["upstream_path"] = up
+
+        if "rate_limit_requests_per_minute" not in mcp:
+            mcp["rate_limit_requests_per_minute"] = 120
+        elif (
+            not isinstance(mcp["rate_limit_requests_per_minute"], int)
+            or mcp["rate_limit_requests_per_minute"] < 1
+        ):
+            raise ValueError(
+                "mcp.rate_limit_requests_per_minute must be a positive integer"
+            )
+
     def _validate_model_config(self, model, index: int, runner_names: set):
         """Validate a model configuration.
 
@@ -216,6 +449,23 @@ class ConfigManager:
         if "model_alias" in model and not isinstance(model["model_alias"], str):
             raise ValueError(f"Model {index}: Model alias must be a string")
 
+        # Validate optional model type (absent == "text" == today's behavior)
+        if "type" in model:
+            if not isinstance(model["type"], str):
+                raise ValueError(f"Model {index}: type must be a string")
+            if model["type"] not in ("text", "audio"):
+                raise ValueError(f"Model {index}: type must be 'text' or 'audio'")
+            # Non-fatal advisory: speech-input audio models usually need an
+            # audio encoder / multimodal projector. TTS-only models that only
+            # set talker_model are still valid, so this is a warning, not an error.
+            if model["type"] == "audio" and not any(
+                key in model for key in ("audio_encoder", "mmproj")
+            ):
+                logger.warning(
+                    f"Model {index}: type is 'audio' but no 'audio_encoder' or "
+                    "'mmproj' is set; speech-input audio models usually require one."
+                )
+
         int_fields = [
             "n_ctx",
             "n_batch",
@@ -239,6 +489,10 @@ class ConfigManager:
             "cache-type-k",
             "cache-type-v",
             "args",
+            "audio_encoder",
+            "talker_model",
+            "code2wav_model",
+            "model_vocoder",
         ]
         for field in str_fields:
             if field in model and not isinstance(model[field], str):
@@ -255,6 +509,7 @@ class ConfigManager:
             "jinja",
             "embedding",
             "reranking",
+            "mcp",
         ]
         for field in bool_fields:
             if field in model and not isinstance(model[field], bool):
@@ -497,6 +752,10 @@ class ConfigManager:
                 "api",
                 "auto_start_runners",
                 "retry_config",
+                "metrics",
+                "mcp",
+                "request_timeout_seconds",
+                "streaming_timeout_seconds",
             ]
             and isinstance(self.config[key], dict)
         ]
@@ -568,7 +827,9 @@ class ConfigManager:
         if isinstance(origins, str):
             origins = [origins]
         if not isinstance(origins, list):
-            raise ValueError("api.cors_allow_origins must be a list of strings or a single string")
+            raise ValueError(
+                "api.cors_allow_origins must be a list of strings or a single string"
+            )
         return [str(o) for o in origins]
 
     def get_runner_host(self, runner_name: str):
@@ -674,6 +935,71 @@ class ConfigManager:
             Set to 0 or None to disable timeout for streaming requests.
         """
         return self.config.get("streaming_timeout_seconds", 3600)
+
+    def get_gpu_metrics_config(self):
+        """Get the GPU metrics configuration.
+
+        Returns:
+            The GPU metrics configuration dictionary with defaults applied.
+        """
+        return self.config.get("metrics", {}).get(
+            "gpu",
+            {
+                "enabled": True,
+                "vendors": ["nvidia", "amd"],
+                "poll_interval_seconds": 2,
+                "history_points": 60,
+                "command_timeout_seconds": 3,
+                "rate_limit_requests_per_minute": 120,
+            },
+        )
+
+    def get_throughput_metrics_config(self) -> dict:
+        """Get the token throughput metrics configuration with defaults applied.
+
+        Returns a dictionary with the keys "enabled" (bool, default True),
+        "history_points" (positive int, default 60, a count of recent
+        completed-request samples retained per model per field) and
+        "rate_limit_requests_per_minute" (positive int, default 120, the per-IP
+        limit for the throughput metrics endpoint). When the metrics block or
+        the throughput sub-block is absent, the safe defaults are returned so
+        the feature is additive and backward compatible.
+
+        Returns:
+            The throughput metrics configuration dictionary with defaults applied.
+        """
+        return self.config.get("metrics", {}).get(
+            "throughput",
+            {
+                "enabled": True,
+                "history_points": 60,
+                "rate_limit_requests_per_minute": 120,
+            },
+        )
+
+    def get_mcp_config(self) -> dict:
+        """Get the MCP proxy configuration with defaults applied.
+
+        Returns a dictionary with the keys "enabled" (bool, default False),
+        "endpoint" (str, default "/v1/mcp", the public FlexLLama path) and
+        "upstream_path" (str, default "/mcp", the path forwarded to on the
+        target llama-server). Any keys present in the config override the
+        defaults; absent keys fall back to the safe defaults so that a config
+        without an "mcp" block disables the feature entirely.
+
+        Returns:
+            The MCP proxy configuration dictionary with defaults applied.
+        """
+        defaults = {
+            "enabled": False,
+            "endpoint": "/v1/mcp",
+            "upstream_path": "/mcp",
+            "rate_limit_requests_per_minute": 120,
+        }
+        mcp = self.config.get("mcp", {})
+        if not isinstance(mcp, dict):
+            return defaults
+        return {**defaults, **mcp}
 
 
 if __name__ == "__main__":

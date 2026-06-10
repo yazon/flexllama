@@ -5,6 +5,21 @@
         "port": 8080,
         "health_endpoint": "/health"
     },
+    "metrics": {
+        "gpu": {
+            "enabled": true,
+            "vendors": ["nvidia", "amd"],
+            "poll_interval_seconds": 2,
+            "history_points": 60,
+            "command_timeout_seconds": 3,
+            "rate_limit_requests_per_minute": 120
+        }
+    },
+    "mcp": {
+        "enabled": false,
+        "endpoint": "/v1/mcp",
+        "upstream_path": "/mcp"
+    },
     "request_timeout_seconds": 1800,
     "streaming_timeout_seconds": 0,
     "retry_config": {
@@ -36,6 +51,16 @@
         "extra_args": [],
         "auto_unload_timeout_seconds": 0
     },
+    "runner-audio": {
+        "type": "llama-server",
+        "path": "/path/to/llama-server",
+        "host": "127.0.0.1",
+        "port": 8087,
+        "inherit_env": true,
+        "env": {},
+        "extra_args": [],
+        "auto_unload_timeout_seconds": 0
+    },
     "models": [
         {
             "runner": "runner1",
@@ -52,6 +77,7 @@
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 99,
             "jinja": true,
+            "mcp": true,
             "env": {
                 "GGML_VULKAN_DEVICE": "0",
                 "MODEL_SPECIFIC_VAR": "example"
@@ -132,6 +158,28 @@
             "embedding": true,
             "pooling": "cls",
             "tensor_split": [1.0, 0.0],
+            "n_gpu_layers": 99,
+            "args": ""
+        },
+        {
+            "runner": "runner-audio",
+            "model": "/path/to/Voxtral-Mini-3B.gguf",
+            "model_alias": "voxtral-audio",
+            "type": "audio",
+            "audio_encoder": "/path/to/Voxtral-Mini-3B-mmproj.gguf",
+            "n_ctx": 8192,
+            "n_gpu_layers": 99,
+            "args": ""
+        },
+        {
+            "runner": "runner-audio",
+            "model": "/path/to/qwen3-omni.gguf",
+            "model_alias": "qwen3-omni-tts",
+            "type": "audio",
+            "audio_encoder": "/path/to/qwen3-omni-mmproj.gguf",
+            "talker_model": "/path/to/qwen3-omni-talker.gguf",
+            "code2wav_model": "/path/to/qwen3-omni-code2wav.gguf",
+            "n_ctx": 8192,
             "n_gpu_layers": 99,
             "args": ""
         }

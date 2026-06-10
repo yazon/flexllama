@@ -629,6 +629,35 @@ class RunnerProcess:
                 f"Command building: After mmproj, {len(cmd)} items: {cmd[-2:]}"
             )
 
+        # Audio encoder is an alias for the audio-capable multimodal projector,
+        # which llama-server loads via --mmproj. Only emit it when an explicit
+        # mmproj is not already set, since llama-server rejects a duplicate flag.
+        if "audio_encoder" in model_config and "mmproj" not in model_config:
+            cmd.extend(["--mmproj", model_config["audio_encoder"]])
+            logger.debug(
+                f"Command building: After audio_encoder (--mmproj), {len(cmd)} items: {cmd[-2:]}"
+            )
+
+        # Optional TTS talker flags (enable the upstream /v1/audio/speech endpoint
+        # declaratively). Each is config-gated and only emitted when present.
+        if "talker_model" in model_config:
+            cmd.extend(["--talker-model", model_config["talker_model"]])
+            logger.debug(
+                f"Command building: After talker_model, {len(cmd)} items: {cmd[-2:]}"
+            )
+
+        if "code2wav_model" in model_config:
+            cmd.extend(["--code2wav-model", model_config["code2wav_model"]])
+            logger.debug(
+                f"Command building: After code2wav_model, {len(cmd)} items: {cmd[-2:]}"
+            )
+
+        if "model_vocoder" in model_config:
+            cmd.extend(["--model-vocoder", model_config["model_vocoder"]])
+            logger.debug(
+                f"Command building: After model_vocoder, {len(cmd)} items: {cmd[-2:]}"
+            )
+
         if "model_alias" in model_config:
             cmd.extend(["--alias", model_config["model_alias"]])
             logger.debug(f"Command building: After alias, {len(cmd)} items: {cmd[-2:]}")
@@ -847,6 +876,7 @@ class RunnerManager:
         self.session_log_dir = session_log_dir or "logs"
         self.runners = {}  # Map of runner name to RunnerProcess
         self.model_runner_map = {}  # Map of model alias to runner name
+        self.mcp_model_aliases: list[str] = []  # Aliases of mcp-tagged models
         self.timeout = (
             config_manager.get_request_timeout_seconds()
         )  # Configurable timeout
@@ -876,6 +906,10 @@ class RunnerManager:
             if runner_name in self.runners:
                 self.runners[runner_name].add_model(model)
                 self.model_runner_map[model_alias] = runner_name
+                # Track mcp-tagged models in config order so that default MCP
+                # routing (first mcp-tagged model) is deterministic.
+                if model.get("mcp", False):
+                    self.mcp_model_aliases.append(model_alias)
             else:
                 logger.error(
                     f"Model {model_alias} references unknown runner {runner_name}"
@@ -1091,6 +1125,24 @@ class RunnerManager:
         runner_name = self.model_runner_map[model_alias]
         return self.runners.get(runner_name)
 
+    def get_default_audio_model_alias(self) -> str | None:
+        """Get the alias of the first configured audio model.
+
+        Iterates the configured models and returns the alias (or basename
+        fallback, consistent with the model->runner mapping) of the first model
+        whose config "type" is "audio". Used by the audio API handlers when a
+        request omits the "model" field, so audio requests never silently route
+        to a text model.
+
+        Returns:
+            The alias of the first audio model, or None if no audio model is
+            configured.
+        """
+        for model in self.config_manager.get_config()["models"]:
+            if model.get("type") == "audio":
+                return model.get("model_alias", os.path.basename(model["model"]))
+        return None
+
     def get_port_for_model(self, model_alias):
         """Get the port for a model.
 
@@ -1113,6 +1165,37 @@ class RunnerManager:
             A list of all model aliases.
         """
         return list(self.model_runner_map.keys())
+
+    def get_mcp_model_aliases(self) -> list[str]:
+        """Get the aliases of all MCP-tagged models in configuration order.
+
+        Returns:
+            A list of model aliases for models tagged with "mcp": true.
+        """
+        return list(self.mcp_model_aliases)
+
+    def select_mcp_model(self, requested_alias: str | None = None) -> str | None:
+        """Select the MCP-tagged model to route an MCP request to.
+
+        Routing rules:
+        - If requested_alias is given and is MCP-tagged, return it.
+        - If requested_alias is given but is NOT MCP-tagged, return None so the
+          caller can surface a clean "not mcp-tagged" error rather than silently
+          routing to a non-MCP model.
+        - If no requested_alias is given, return the first MCP-tagged model in
+          configuration order, or None when none is configured.
+
+        Args:
+            requested_alias: Explicit model alias from the request, or None.
+
+        Returns:
+            The selected MCP model alias, or None when no suitable model exists.
+        """
+        if requested_alias is not None:
+            if requested_alias in self.mcp_model_aliases:
+                return requested_alias
+            return None
+        return self.mcp_model_aliases[0] if self.mcp_model_aliases else None
 
     def get_runner_names(self):
         """Get all runner names.

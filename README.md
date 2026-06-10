@@ -18,9 +18,11 @@
 - 🚀 **Multiple llama.cpp instances** - Run different models simultaneously
 - 🎯 **Multi-GPU support** - Distribute models across different GPUs
 - 🔌 **OpenAI v1 API compatible** - Drop-in replacement for OpenAI endpoints
-- 📊 **Real-time dashboard** - Monitor model status with a web interface
+- 📊 **Real-time dashboard** - Monitor model status, live GPU telemetry, and per-model token throughput in a web interface
 - 🤖 **Chat & Completions** - Full chat and text completion support
 - 🔍 **Embeddings & Reranking** - Supports models for embeddings and reranking
+- 🎙️ **Audio endpoints** - Speech-to-text and text-to-speech proxied to audio models (Voxtral, Qwen3-Omni, and more)
+- 🛠️ **MCP proxy** - Optional unified Model Context Protocol endpoint that routes requests to `mcp`-tagged models
 - ⚡ **Auto-start** - Automatically start default runners on launch
 - 🔄 **Model switching** - Dynamically load/unload models as needed
 - ⏱️ **Auto model unload** - Automatically unload models after a configurable idle timeout
@@ -369,6 +371,28 @@ python tests/test_model_switching.py config.json
 - Dynamic model loading and switching
 - Runner state management and health monitoring
 - Proper cleanup of resources
+
+#### Audio, MCP, and Throughput Tests
+
+These cover the audio endpoints, the optional MCP proxy, and the token-throughput collector. They differ in whether a running server is required:
+
+```bash
+# Audio endpoint routing/proxying (server must be RUNNING):
+python tests/test_audio.py
+
+# MCP proxy: offline config + selector checks always run; pass a running
+# server with mcp.enabled (and --mcp-enabled) to also run the online JSON-RPC checks:
+python tests/test_mcp.py
+
+# Token-throughput collector unit checks (offline, no server needed):
+python tests/test_throughput.py
+```
+
+**What they test:**
+
+- `test_audio.py` - Audio model routing, multipart/binary proxying, and clean error handling (never an unhandled 500)
+- `test_mcp.py` - MCP config validation, model selector routing rules, and the disabled-route 404 backward-compat guarantee
+- `test_throughput.py` - The throughput collector's rolling 1-min average/peak, bounded history, and JSON-safe snapshots
 
 ## License
 
