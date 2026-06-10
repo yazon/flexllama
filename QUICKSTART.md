@@ -1,11 +1,11 @@
-# FlexLLama Quickstart - Run Qwen3-4B in 5 Minutes
+# FlexLLama Quickstart - Run Qwen3.5-4B in 5 Minutes
 
-Get FlexLLama running with the Qwen3-4B-Instruct model in just a few commands using Docker.
+Get FlexLLama running with the Qwen3.5-4B-Instruct model in just a few commands using Docker.
 
 ## Prerequisites
 
 - Docker and Docker Compose installed
-- ~3GB free disk space (2.5GB for model + build cache)
+- ~3.5GB free disk space (2.8GB for model + build cache)
 - Internet connection for model download
 - For GPU acceleration: CUDA-capable GPU (NVIDIA) or Vulkan-capable GPU (AMD/Intel)
 
@@ -18,10 +18,10 @@ Get FlexLLama running with the Qwen3-4B-Instruct model in just a few commands us
 git clone https://github.com/yazon/flexllama.git
 cd flexllama
 
-# 2. Download the Qwen3-4B model (2.5GB)
+# 2. Download the Qwen3.5-4B model (2.8GB)
 mkdir -p models
-wget -O models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
-  "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf?download=true"
+wget -O models/Qwen3.5-4B-Q4_K_M.gguf \
+  "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf?download=true"
 
 # 3. Use the unified configuration
 cp docker/config.qwen3.unified.json docker/config.json
@@ -43,9 +43,9 @@ curl http://localhost:8090/v1/models
 git clone https://github.com/yazon/flexllama.git
 Set-Location flexllama
 
-# 2. Download the Qwen3-4B model (2.5GB)
+# 2. Download the Qwen3.5-4B model (2.8GB)
 New-Item -ItemType Directory -Force -Path models | Out-Null
-curl.exe -L "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf?download=true" -o "models\Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+curl.exe -L "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf?download=true" -o "models\Qwen3.5-4B-Q4_K_M.gguf"
 
 # 3. Use the unified configuration
 Copy-Item docker\config.qwen3.unified.json docker\config.json -Force
@@ -68,16 +68,16 @@ Once FlexLLama is running, test it with a simple chat request:
 curl -s http://localhost:8090/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "qwen3-4b-instruct-q4_k_m-cpu",
+    "model": "qwen3.5-4b-q4_k_m-cpu",
     "messages": [{"role": "user", "content": "Hello! Please introduce yourself in one sentence."}],
     "stream": false
   }'
 ```
 
 **Model Aliases:** Use the alias matching your backend:
-- `qwen3-4b-instruct-q4_k_m-cpu` (CPU)
-- `qwen3-4b-instruct-q4_k_m-cuda` (CUDA GPU)
-- `qwen3-4b-instruct-q4_k_m-vulkan` (Vulkan GPU)
+- `qwen3.5-4b-q4_k_m-cpu` (CPU)
+- `qwen3.5-4b-q4_k_m-cuda` (CUDA GPU)
+- `qwen3.5-4b-q4_k_m-vulkan` (Vulkan GPU)
 
 ## Access the Dashboard
 
@@ -106,9 +106,9 @@ docker compose down
 
 **Slow startup**: First-time model loading can take 1-2 minutes.
 
-**Model not found**: Ensure the model file exists at `models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf`.
+**Model not found**: Ensure the model file exists at `models/Qwen3.5-4B-Q4_K_M.gguf`.
 
-**Out of memory**: The Qwen3-4B Q4_K_M model requires ~3-4GB RAM. Reduce `n_ctx` in the config if needed.
+**Out of memory**: The Qwen3.5-4B Q4_K_M model requires ~3-4GB RAM. Reduce `n_ctx` in the config if needed.
 
 ## Backend Options
 
@@ -148,4 +148,4 @@ docker compose --profile vulkan up -d  # Vulkan GPU
 
 ---
 
-**Model Reference**: [Qwen3-4B-Instruct-2507-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/blob/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf) by Unsloth
+**Model Reference**: [Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/blob/main/Qwen3.5-4B-Q4_K_M.gguf) by Unsloth

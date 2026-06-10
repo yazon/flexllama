@@ -1,0 +1,9 @@
+.git/
+frontend/vendor/
+logs/
+tests/logs/
+.venv/
+venv_uv/
+dist/
+build/
+__pycache__/

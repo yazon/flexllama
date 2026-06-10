@@ -73,12 +73,7 @@
     const runnerInfo = data.runner_info || {};
     const modelHealth = data.model_health || {};
 
-    updateRunnersSection(
-      activeRunners,
-      runnerCurrentModels,
-      runnerInfo,
-      modelHealth,
-    );
+    updateRunnersSection(activeRunners, runnerCurrentModels, runnerInfo, modelHealth);
     updateModelsSection(modelHealth, runnerCurrentModels);
   }
 
@@ -86,7 +81,7 @@
     activeRunners = {},
     runnerModels = {},
     runnerInfo = {},
-    modelHealth = {},
+    modelHealth = {}
   ) {
     const container = document.getElementById("runnersContainer");
     if (!container) return;
@@ -182,9 +177,11 @@
       <div class="models-list">
         ${
           data.models.length > 0
-            ? data.models.map(function (model) {
-                return createModelItem(model);
-              }).join("")
+            ? data.models
+                .map(function (model) {
+                  return createModelItem(model);
+                })
+                .join("")
             : '<div class="empty-state"><p>No models currently loaded</p></div>'
         }
       </div>
@@ -292,7 +289,7 @@
       "start",
       "Starting runner...",
       "Runner started successfully",
-      "Failed to start runner",
+      "Failed to start runner"
     );
   }
 
@@ -302,7 +299,7 @@
       `Are you sure you want to stop runner "${runnerName}"? This will interrupt any ongoing operations and unload the current model.`,
       function () {
         stopRunner(runnerName);
-      },
+      }
     );
   }
 
@@ -312,7 +309,7 @@
       "stop",
       "Stopping runner...",
       "Runner stopped successfully",
-      "Failed to stop runner",
+      "Failed to stop runner"
     );
   }
 
@@ -322,7 +319,7 @@
       `Are you sure you want to restart runner "${runnerName}"? This will stop the runner, then start it again with the same model.`,
       function () {
         restartRunner(runnerName);
-      },
+      }
     );
   }
 
@@ -332,7 +329,7 @@
       "restart",
       "Restarting runner...",
       "Runner restarted successfully",
-      "Failed to restart runner",
+      "Failed to restart runner"
     );
   }
 
@@ -341,7 +338,7 @@
     action,
     inProgressMessage,
     successMessage,
-    defaultErrorMessage,
+    defaultErrorMessage
   ) {
     try {
       setOperationState(runnerName, action, inProgressMessage, "status-info");
@@ -353,7 +350,7 @@
           headers: {
             "Content-Type": "application/json",
           },
-        },
+        }
       );
       const data = await response.json();
 
@@ -397,7 +394,7 @@
     const runnerSlug = utils.slugify(runnerName);
     const statusElement = document.getElementById(`status-${runnerSlug}`);
     const controlPanel = document.querySelector(
-      `.runner-controls[data-runner-slug="${runnerSlug}"]`,
+      `.runner-controls[data-runner-slug="${runnerSlug}"]`
     );
     const operationState = state.operationStates[runnerName];
 
@@ -514,9 +511,7 @@
         onConfirm();
       });
 
-    modal
-      .querySelector('[data-action="cancel"]')
-      .addEventListener("click", closeModal);
+    modal.querySelector('[data-action="cancel"]').addEventListener("click", closeModal);
 
     modal.addEventListener("click", function (event) {
       if (event.target === modal) {

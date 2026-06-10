@@ -4,10 +4,12 @@
 
   Dashboard.config = {
     API_BASE_URL: window.FLEXLLAMA_CONFIG.HEALTH_ENDPOINT || "/health",
-    GPU_METRICS_URL:
-      window.FLEXLLAMA_CONFIG.GPU_METRICS_ENDPOINT || "/v1/metrics/gpus",
+    GPU_METRICS_URL: window.FLEXLLAMA_CONFIG.GPU_METRICS_ENDPOINT || "/v1/metrics/gpus",
+    THROUGHPUT_METRICS_URL:
+      window.FLEXLLAMA_CONFIG.THROUGHPUT_METRICS_ENDPOINT || "/v1/metrics/throughput",
     REFRESH_INTERVAL: 2000,
     GPU_METRICS_REFRESH_INTERVAL: 2000,
+    THROUGHPUT_METRICS_REFRESH_INTERVAL: 2000,
     REQUEST_TIMEOUT: 5000,
   };
 
@@ -19,6 +21,9 @@
     operationStates: {},
     gpuMetricsState: null,
     gpuMetricsRateLimitedUntil: 0,
+    throughputMetricsInterval: null,
+    throughputMetricsState: null,
+    throughputMetricsRateLimitedUntil: 0,
   };
 
   Dashboard.constants = {
@@ -58,8 +63,7 @@
     let status = `${timeoutSeconds}s`;
     if (countdownSeconds !== null && countdownSeconds !== undefined) {
       if (countdownSeconds <= 0) {
-        status +=
-          ' <span class="countdown-warning">(Unloading now...)</span>';
+        status += ' <span class="countdown-warning">(Unloading now...)</span>';
       } else {
         status += ` <span class="countdown-timer">(Unloading in ${countdownSeconds}s)</span>`;
       }
@@ -96,8 +100,7 @@
     Dashboard.state.lastUpdateTime = new Date();
     const lastUpdatedElement = document.getElementById("lastUpdated");
     if (lastUpdatedElement) {
-      lastUpdatedElement.textContent =
-        `Last updated: ${Dashboard.state.lastUpdateTime.toLocaleTimeString()}`;
+      lastUpdatedElement.textContent = `Last updated: ${Dashboard.state.lastUpdateTime.toLocaleTimeString()}`;
     }
   }
 
@@ -141,6 +144,11 @@
       Dashboard.gpu.startGpuMetricsRefresh();
       Dashboard.gpu.fetchGpuMetrics();
     }
+
+    if (Dashboard.throughput) {
+      Dashboard.throughput.startThroughputMetricsRefresh();
+      Dashboard.throughput.fetchThroughputMetrics();
+    }
   });
 
   document.addEventListener("visibilitychange", function () {
@@ -150,6 +158,9 @@
       }
       if (Dashboard.gpu) {
         Dashboard.gpu.stopGpuMetricsRefresh();
+      }
+      if (Dashboard.throughput) {
+        Dashboard.throughput.stopThroughputMetricsRefresh();
       }
       return;
     }
@@ -161,6 +172,10 @@
     if (Dashboard.gpu) {
       Dashboard.gpu.startGpuMetricsRefresh();
       Dashboard.gpu.fetchGpuMetrics();
+    }
+    if (Dashboard.throughput) {
+      Dashboard.throughput.startThroughputMetricsRefresh();
+      Dashboard.throughput.fetchThroughputMetrics();
     }
   });
 
@@ -174,6 +189,14 @@
       Dashboard.gpu.startGpuMetricsRefresh();
       Dashboard.gpu.fetchGpuMetrics();
     }
+
+    if (
+      Dashboard.throughput &&
+      !Dashboard.throughput.isThroughputMetricsRefreshRunning()
+    ) {
+      Dashboard.throughput.startThroughputMetricsRefresh();
+      Dashboard.throughput.fetchThroughputMetrics();
+    }
   });
 
   window.addEventListener("beforeunload", function () {
@@ -182,6 +205,9 @@
     }
     if (Dashboard.gpu) {
       Dashboard.gpu.stopGpuMetricsRefresh();
+    }
+    if (Dashboard.throughput) {
+      Dashboard.throughput.stopThroughputMetricsRefresh();
     }
   });
 
@@ -208,6 +234,9 @@
     },
     fetchGpuMetrics: function () {
       return Dashboard.gpu && Dashboard.gpu.fetchGpuMetrics();
+    },
+    fetchThroughputMetrics: function () {
+      return Dashboard.throughput && Dashboard.throughput.fetchThroughputMetrics();
     },
     config: Dashboard.config,
   };

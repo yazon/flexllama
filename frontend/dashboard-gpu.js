@@ -13,10 +13,10 @@
 
     state.gpuMetricsInterval = setInterval(
       fetchGpuMetrics,
-      config.GPU_METRICS_REFRESH_INTERVAL,
+      config.GPU_METRICS_REFRESH_INTERVAL
     );
     console.log(
-      `GPU metrics auto-refresh started: every ${config.GPU_METRICS_REFRESH_INTERVAL}ms`,
+      `GPU metrics auto-refresh started: every ${config.GPU_METRICS_REFRESH_INTERVAL}ms`
     );
   }
 
@@ -54,8 +54,10 @@
 
       if (response.status === 429) {
         const retryAfterHeader = response.headers.get("Retry-After");
-        const retryAfterSeconds =
-          Math.max(1, parseInt(retryAfterHeader || "5", 10) || 5);
+        const retryAfterSeconds = Math.max(
+          1,
+          parseInt(retryAfterHeader || "5", 10) || 5
+        );
         state.gpuMetricsRateLimitedUntil = Date.now() + retryAfterSeconds * 1000;
 
         if (!state.gpuMetricsState || state.gpuMetricsState.status !== "available") {
@@ -132,18 +134,15 @@
   function createGpuMetricsUnavailable(data) {
     const reason = data.reason || "unknown";
     const reasonText = {
-      unsupported_platform:
-        "GPU metrics are not supported on this operating system.",
+      unsupported_platform: "GPU metrics are not supported on this operating system.",
       tool_not_found:
         "No supported GPU telemetry tool found. Install nvidia-smi and/or amd-smi.",
       command_failed:
         "GPU telemetry command failed. Check driver/tool installation and GPU visibility.",
       command_timeout: "amd-smi command timed out.",
       parse_error: "Failed to parse amd-smi output.",
-      no_visible_gpus:
-        "No visible GPUs detected. Ensure GPU devices are accessible.",
-      disabled_in_config:
-        "GPU metrics collection is disabled in configuration.",
+      no_visible_gpus: "No visible GPUs detected. Ensure GPU devices are accessible.",
+      disabled_in_config: "GPU metrics collection is disabled in configuration.",
       fetch_error: "Could not reach the GPU metrics endpoint.",
       rate_limited:
         "GPU metrics request rate limited. The dashboard will retry shortly.",
@@ -188,8 +187,7 @@
         ? Math.round((gpu.memory_used_mb / gpu.memory_total_mb) * 100)
         : null;
     const util =
-      gpu.utilization_gpu_percent !== null &&
-      gpu.utilization_gpu_percent !== undefined
+      gpu.utilization_gpu_percent !== null && gpu.utilization_gpu_percent !== undefined
         ? `${Math.round(gpu.utilization_gpu_percent)}%`
         : "--";
     const temp =
@@ -283,10 +281,7 @@
 
     const points = filtered.map(function (value, index) {
       const x = padding + index * step;
-      const y =
-        height -
-        padding -
-        ((value - min) / range) * (height - padding * 2);
+      const y = height - padding - ((value - min) / range) * (height - padding * 2);
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     });
 
