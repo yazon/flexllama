@@ -641,6 +641,95 @@ class ConfigManager:
                 f"Runner {runner_name}: auto_unload_timeout_seconds must be non-negative"
             )
 
+        # Check kv_cache (disk-backed KV cache persistence, optional)
+        if "kv_cache" in runner:
+            self._validate_kv_cache_config(runner, runner_name)
+
+    @staticmethod
+    def _validate_kv_cache_config(runner, runner_name: str):
+        """Validate the optional per-runner kv_cache block.
+
+        Args:
+            runner: The runner configuration to validate (mutated with
+                defaults when the block is enabled).
+            runner_name: The name of the runner.
+
+        Raises:
+            ValueError: If the kv_cache configuration is invalid.
+        """
+        kv = runner["kv_cache"]
+        if not isinstance(kv, dict):
+            raise ValueError(f"Runner {runner_name}: kv_cache must be an object")
+
+        if "enabled" not in kv:
+            kv["enabled"] = False
+        if not isinstance(kv["enabled"], bool):
+            raise ValueError(
+                f"Runner {runner_name}: kv_cache.enabled must be a boolean"
+            )
+
+        if not kv["enabled"]:
+            return
+
+        # Snapshot directory (relative paths resolve against the working dir)
+        if "dir" not in kv:
+            kv["dir"] = os.path.join("kv_snapshots", runner_name)
+        elif not isinstance(kv["dir"], str) or not kv["dir"].strip():
+            raise ValueError(
+                f"Runner {runner_name}: kv_cache.dir must be a non-empty string"
+            )
+
+        # Periodic idle refresh interval (0 disables the periodic save)
+        if "refresh_interval_seconds" not in kv:
+            kv["refresh_interval_seconds"] = 300
+        elif not isinstance(kv["refresh_interval_seconds"], int) or isinstance(
+            kv["refresh_interval_seconds"], bool
+        ):
+            raise ValueError(
+                f"Runner {runner_name}: kv_cache.refresh_interval_seconds must be an integer"
+            )
+        elif kv["refresh_interval_seconds"] < 0:
+            raise ValueError(
+                f"Runner {runner_name}: kv_cache.refresh_interval_seconds must be non-negative"
+            )
+
+        # LRU cap of snapshots kept per model
+        if "max_snapshots" not in kv:
+            kv["max_snapshots"] = 4
+        elif not isinstance(kv["max_snapshots"], int) or isinstance(
+            kv["max_snapshots"], bool
+        ):
+            raise ValueError(
+                f"Runner {runner_name}: kv_cache.max_snapshots must be an integer"
+            )
+        elif kv["max_snapshots"] < 1:
+            raise ValueError(
+                f"Runner {runner_name}: kv_cache.max_snapshots must be >= 1"
+            )
+
+        # Auto-restore of the latest snapshot after a runner (re)start
+        if "auto_restore_on_start" not in kv:
+            kv["auto_restore_on_start"] = False
+        elif not isinstance(kv["auto_restore_on_start"], bool):
+            raise ValueError(
+                f"Runner {runner_name}: kv_cache.auto_restore_on_start must be a boolean"
+            )
+
+    def get_kv_cache_config(self, runner_name: str) -> dict:
+        """Get the kv_cache configuration for a runner.
+
+        Args:
+            runner_name: The runner name.
+
+        Returns:
+            The kv_cache config dict (always contains at least "enabled").
+        """
+        runner = self.get_runner_config(runner_name)
+        kv = runner.get("kv_cache")
+        if not isinstance(kv, dict):
+            return {"enabled": False}
+        return kv
+
     def get_config(self):
         """Get the full configuration.
 

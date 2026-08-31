@@ -39,7 +39,14 @@
             "RUNNER_SPECIFIC_VAR": "value"
         },
         "extra_args": ["--verbose"],
-        "auto_unload_timeout_seconds": 300
+        "auto_unload_timeout_seconds": 300,
+        "kv_cache": {
+            "enabled": true,
+            "dir": "kv_snapshots/runner1",
+            "refresh_interval_seconds": 300,
+            "max_snapshots": 4,
+            "auto_restore_on_start": true
+        }
     },
     "runner2": {
         "type": "llama-server",

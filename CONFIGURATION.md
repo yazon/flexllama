@@ -110,6 +110,73 @@ FlexLLama supports automatic model unloading to free up RAM when models are idle
 - Auto-unload frees RAM by stopping the runner process entirely
 - Models will be automatically reloaded when the next request arrives
 
+## KV Cache Configuration
+
+FlexLLama can persist llama.cpp slot state (KV cache + prompt tokens) to disk
+so that switching between chats, switching models, or restarting FlexLLama does
+not cost a full re-prefill. It builds on the vanilla llama-server slot
+save/restore API (`--slot-save-path`), so the runner must be a llama-server
+build that supports `POST /slots/{id}?action=save|restore`.
+
+```json
+{
+    "runner1": {
+        "path": "/path/to/llama-server",
+        "port": 8085,
+        "kv_cache": {
+            "enabled": true,
+            "dir": "kv_snapshots/runner1",
+            "refresh_interval_seconds": 300,
+            "max_snapshots": 4,
+            "auto_restore_on_start": true
+        }
+    }
+}
+```
+
+**Options:**
+- `enabled`: Turn persistence on for this runner (default: `false`)
+- `dir`: Directory for snapshot files, relative to the FlexLLama working
+  directory (default: `kv_snapshots/{runner_name}`). Must be writable —
+  if it is not, persistence is disabled for that runner and startup
+  continues normally.
+- `refresh_interval_seconds`: Periodically re-save the active chat while the
+  runner is idle (default: `300`, `0` disables). Bounds how stale the
+  on-disk snapshot is if the machine dies without a graceful stop.
+- `max_snapshots`: Per-model LRU cap on stored snapshots, oldest first
+  (default: `4`). One file is kept per chat, overwritten in place.
+- `auto_restore_on_start`: After the runner (re)starts, restore the last
+  tracked chat for the started model (default: `false`).
+
+**Behavior:**
+- Only the chat-completions endpoint (`/v1/chat/completions`) participates;
+  other endpoints are unaffected.
+- The outgoing chat is saved before its slot state can be replaced: on chat
+  switch (in-band, before forwarding), before every runner stop (manual stop,
+  model switch, auto-unload, FlexLLama shutdown), and on the idle refresh
+  tick.
+- On a chat switch, the incoming chat's snapshot is restored first, so the
+  forwarded request only pays for tokens new since the snapshot.
+- Snapshot files are named `{model}__{chat_id}.llama`; a small
+  `flexllama__{runner}.json` state file records the last tracked chat so
+  auto-restore works across FlexLLama restarts.
+- Saves are skipped when the disk cannot fit another copy of the current
+  snapshot (free space must cover 1.1x the largest existing snapshot,
+  minimum ~1.1 GiB for a model with no snapshots yet).
+- All persistence is fail-soft: errors are logged and never break request
+  forwarding.
+- v1 scope: runners with a single slot (`-np 1`). Runners with multiple
+  parallel slots are not supported yet.
+
+**Management endpoints** (per runner; `409` when KV cache is disabled for
+that runner):
+- `GET  /v1/runners/{runner_name}/kv` — status, tracked chat, snapshot list
+- `POST /v1/runners/{runner_name}/kv/save` — save the tracked chat now
+- `POST /v1/runners/{runner_name}/kv/restore` — restore a snapshot
+  (body: `{"filename": "..."}`, optional; defaults to the latest known one)
+- `POST /v1/runners/{runner_name}/kv/erase` — delete a snapshot file
+  (body: `{"filename": "..."}`)
+
 ## Environment Variables
 
 FlexLLama supports setting environment variables for runners and individual models. This is useful for configuring GPU devices, library paths, or other runtime settings.
@@ -284,6 +351,7 @@ Once enabled, send your MCP (JSON-RPC) requests to `POST http://localhost:8080/v
 - `env`: Dictionary of environment variables to set for all models on this runner
 - `extra_args`: Additional arguments for llama-server (applied to all models using this runner)
 - `auto_unload_timeout_seconds`: Automatically unload model after this many seconds of inactivity (0 disables, default: 0)
+- `kv_cache`: Object enabling disk-backed KV cache persistence for this runner (default: disabled). See [KV Cache Configuration](#kv-cache-configuration).
 
 ### Model Options
 

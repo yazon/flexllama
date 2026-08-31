@@ -195,3 +195,9 @@ cython_debug/
 
 # FlexLLama related
 logs/
+# KV cache persistence snapshots (per-runner disk KV state)
+kv_snapshots/
+# KV cache test scratch
+tests/.tmp/
+# KV cache test scratch
+.venv-lint/

@@ -18,6 +18,7 @@ import importlib.resources
 from .runner import HealthStatus, HealthMessages
 from .gpu_metrics import GPUMetricsCollector, RateLimiter, build_runner_gpu_associations
 from .throughput_metrics import ThroughputMetricsCollector
+from .kv_cache import compute_chat_identity
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
@@ -145,6 +146,13 @@ class APIServer:
             web.post("/v1/runners/{runner_name}/stop", self.handle_runner_stop),
             web.post("/v1/runners/{runner_name}/restart", self.handle_runner_restart),
             web.get("/v1/runners/status", self.handle_runners_status),
+            # KV cache persistence routes (per-runner, no-op 409 when disabled)
+            web.get("/v1/runners/{runner_name}/kv", self.handle_runner_kv_status),
+            web.post("/v1/runners/{runner_name}/kv/save", self.handle_runner_kv_save),
+            web.post(
+                "/v1/runners/{runner_name}/kv/restore", self.handle_runner_kv_restore
+            ),
+            web.post("/v1/runners/{runner_name}/kv/erase", self.handle_runner_kv_erase),
             web.get(self.gpu_metrics_endpoint, self.handle_gpu_metrics),
             web.get(self.throughput_metrics_endpoint, self.handle_throughput_metrics),
             # Dashboard routes
@@ -197,6 +205,9 @@ class APIServer:
             # Start auto-unload watchdog
             await self.runner_manager.start_auto_unload_watchdog()
 
+            # Start periodic KV snapshot refresh (no-op if no store enabled)
+            await self.runner_manager.start_kv_cache_refresh()
+
             # Start GPU metrics collector
             await self.gpu_metrics_collector.start()
 
@@ -216,6 +227,10 @@ class APIServer:
         try:
             # Stop auto-unload watchdog first
             await self.runner_manager.stop_auto_unload_watchdog()
+
+            # Stop periodic KV refresh before runners are stopped, so the
+            # final snapshots come from the runner stop hook instead.
+            await self.runner_manager.stop_kv_cache_refresh()
 
             # Stop GPU metrics collector
             await self.gpu_metrics_collector.stop()
@@ -810,6 +825,143 @@ class APIServer:
                 status=500,
             )
 
+    # ------------------------------------------------------------------
+    # KV cache persistence endpoints
+    # ------------------------------------------------------------------
+
+    def _get_runner_kv_store(self, request):
+        """Resolve the KV store for a runner route.
+
+        Args:
+            request: The request (runner_name in match_info).
+
+        Returns:
+            Tuple (store, error_response). Exactly one of them is None.
+        """
+        runner_name = request.match_info.get("runner_name")
+        if runner_name not in self.runner_manager.get_runner_names():
+            return None, web.json_response(
+                {"error": {"message": f"Unknown runner: {runner_name}"}},
+                status=404,
+            )
+        store = self.runner_manager.runners[runner_name].kv_store
+        if store is None:
+            return None, web.json_response(
+                {
+                    "error": {
+                        "message": (
+                            f"KV cache persistence is not enabled for runner "
+                            f"{runner_name} (set runner.kv_cache.enabled=true)"
+                        )
+                    }
+                },
+                status=409,
+            )
+        return store, None
+
+    async def handle_runner_kv_status(self, request):
+        """Handle GET /v1/runners/{runner_name}/kv requests.
+
+        Returns:
+            The response with the runner's KV persistence status.
+        """
+        store, error = self._get_runner_kv_store(request)
+        if error is not None:
+            return error
+        try:
+            return web.json_response({"success": True, "kv_cache": store.status()})
+        except Exception as e:
+            logger.error(f"Error getting KV status: {e}")
+            return web.json_response(
+                {"error": {"message": f"Failed to get KV status: {str(e)}"}},
+                status=500,
+            )
+
+    async def handle_runner_kv_save(self, request):
+        """Handle POST /v1/runners/{runner_name}/kv/save requests.
+
+        Returns:
+            The response with the save result.
+        """
+        store, error = self._get_runner_kv_store(request)
+        if error is not None:
+            return error
+        try:
+            ok, message = await store.manual_save()
+            return web.json_response(
+                {"success": ok, "message": message},
+                status=200 if ok else 500,
+            )
+        except Exception as e:
+            logger.error(f"Error saving KV snapshot: {e}")
+            return web.json_response(
+                {"error": {"message": f"Failed to save KV snapshot: {str(e)}"}},
+                status=500,
+            )
+
+    async def handle_runner_kv_restore(self, request):
+        """Handle POST /v1/runners/{runner_name}/kv/restore requests.
+
+        Body: {"filename": "..."} (optional; defaults to the latest known
+        snapshot).
+
+        Returns:
+            The response with the restore result.
+        """
+        store, error = self._get_runner_kv_store(request)
+        if error is not None:
+            return error
+        try:
+            try:
+                data = await request.json()
+            except json.JSONDecodeError:
+                data = {}
+            filename = data.get("filename") if isinstance(data, dict) else None
+            ok, message = await store.manual_restore(filename)
+            return web.json_response(
+                {"success": ok, "message": message},
+                status=200 if ok else 500,
+            )
+        except Exception as e:
+            logger.error(f"Error restoring KV snapshot: {e}")
+            return web.json_response(
+                {"error": {"message": f"Failed to restore KV snapshot: {str(e)}"}},
+                status=500,
+            )
+
+    async def handle_runner_kv_erase(self, request):
+        """Handle POST /v1/runners/{runner_name}/kv/erase requests.
+
+        Body: {"filename": "..."} (required).
+
+        Returns:
+            The response with the erase result.
+        """
+        store, error = self._get_runner_kv_store(request)
+        if error is not None:
+            return error
+        try:
+            try:
+                data = await request.json()
+            except json.JSONDecodeError:
+                data = {}
+            filename = data.get("filename") if isinstance(data, dict) else None
+            if not filename:
+                return web.json_response(
+                    {"error": {"message": "filename is required"}}, status=400
+                )
+            ok, message = store.manual_erase(filename)
+            return web.json_response(
+                {"success": ok, "message": message},
+                status=200 if ok else 404,
+            )
+        except Exception as e:
+            logger.error(f"Error erasing KV snapshot: {e}")
+            return web.json_response(
+                {"error": {"message": f"Failed to erase KV snapshot: {str(e)}"}},
+                status=500,
+            )
+
     async def handle_gpu_metrics(self, request):
         """Handle GET /v1/metrics/gpus requests.
 
@@ -933,9 +1085,14 @@ class APIServer:
                 {"error": {"message": f"Model not found: {model_alias}"}}, status=404
             )
 
+        # KV cache persistence: persist the outgoing chat and warm the
+        # incoming one before the request is forwarded (no-op unless the
+        # model's runner has kv_cache.enabled).
+        kv_identity = await self._kv_handle_incoming(model_alias, data)
+
         # Forward request with unified pre-flight approach
         return await self._forward_request_unified(
-            request, model_alias, "/v1/chat/completions", data
+            request, model_alias, "/v1/chat/completions", data, kv_identity
         )
 
     async def handle_completions(self, request):
@@ -1525,7 +1682,44 @@ class APIServer:
         except IndexError:
             return None
 
-    async def _forward_request_unified(self, request, model_alias, endpoint, data):
+    async def _kv_handle_incoming(self, model_alias, data):
+        """Run the KV persistence hook for an incoming chat request.
+
+        Persists the outgoing chat's slot state (if tracked) and restores the
+        incoming chat's snapshot (if present) before the request is forwarded.
+        No-op (returns None) when KV persistence is not enabled for the
+        model's runner.
+
+        Args:
+            model_alias: The model alias.
+            data: The parsed chat-completions request body.
+
+        Returns:
+            The chat identity string, or None when the hook does not apply.
+        """
+        store = self.runner_manager.get_kv_store_for_model(model_alias)
+        if store is None:
+            return None
+        identity = compute_chat_identity(data.get("messages"))
+        await store.on_request(model_alias, data.get("messages"))
+        return identity
+
+    def _kv_mark_processed(self, model_alias, kv_identity, ok):
+        """Record the outcome of a forwarded chat request for KV tracking.
+
+        Safe to call with a None kv_identity (no-op) when the request did not
+        go through the KV hook.
+        """
+        if kv_identity is None:
+            return
+        store = self.runner_manager.get_kv_store_for_model(model_alias)
+        if store is None:
+            return
+        store.mark_processed(model_alias, kv_identity, ok)
+
+    async def _forward_request_unified(
+        self, request, model_alias, endpoint, data, kv_identity=None
+    ):
         """Unified request forwarding with pre-flight readiness check for both streaming and non-streaming.
 
         Args:
@@ -1533,6 +1727,8 @@ class APIServer:
             model_alias: The model alias.
             endpoint: The API endpoint.
             data: The request data.
+            kv_identity: Optional KV chat identity (see _kv_handle_incoming);
+                used to record the forward outcome for KV persistence.
 
         Returns:
             The response.
@@ -1546,6 +1742,7 @@ class APIServer:
 
         if not is_ready:
             logger.error(f"Model {model_alias} not ready: {error_message}")
+            self._kv_mark_processed(model_alias, kv_identity, ok=False)
             return web.json_response(
                 {
                     "error": {
@@ -1564,7 +1761,7 @@ class APIServer:
                 f"Forwarding streaming request to model {model_alias} at {endpoint}"
             )
             return await self._forward_streaming_request(
-                request, model_alias, endpoint, data
+                request, model_alias, endpoint, data, kv_identity
             )
         else:
             logger.debug(
@@ -1582,6 +1779,8 @@ class APIServer:
                 ) = await self.runner_manager.forward_request(
                     model_alias, endpoint, data
                 )
+                # Record the outcome for KV persistence tracking.
+                self._kv_mark_processed(model_alias, kv_identity, ok=success)
                 if success and isinstance(response_data, dict):
                     # Cheap, non-blocking throughput capture: usage/timings are
                     # already in scope. Never let this raise into the request.
@@ -1599,7 +1798,9 @@ class APIServer:
                 if request_start_notified:
                     await self._notify_request_end(model_alias)
 
-    async def _forward_streaming_request(self, request, model_alias, endpoint, data):
+    async def _forward_streaming_request(
+        self, request, model_alias, endpoint, data, kv_identity=None
+    ):
         """Forward a streaming request to the appropriate runner.
 
         Args:
@@ -1607,6 +1808,8 @@ class APIServer:
             model_alias: The model alias.
             endpoint: The API endpoint.
             data: The request data.
+            kv_identity: Optional KV chat identity (see _kv_handle_incoming);
+                used to record the forward outcome for KV persistence.
 
         Returns:
             The streaming response.
@@ -1672,6 +1875,7 @@ class APIServer:
                 ) as response:
                     # Check if this is an error response
                     if response.status != 200:
+                        self._kv_mark_processed(model_alias, kv_identity, ok=False)
                         try:
                             error_data = await response.json()
                             return web.json_response(error_data, status=response.status)
@@ -1681,6 +1885,10 @@ class APIServer:
                                 {"error": {"message": error_text}},
                                 status=response.status,
                             )
+
+                    # 200: llama-server accepted the request (the prompt is
+                    # being processed); the slot will hold this chat's state.
+                    self._kv_mark_processed(model_alias, kv_identity, ok=True)
 
                     # Create a streaming response with the same headers
                     headers = {

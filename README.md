@@ -24,6 +24,7 @@
 - 🎙️ **Audio endpoints** - Speech-to-text and text-to-speech proxied to audio models (Voxtral, Qwen3-Omni, and more)
 - 🛠️ **MCP proxy** - Optional unified Model Context Protocol endpoint that routes requests to `mcp`-tagged models
 - ⚡ **Auto-start** - Automatically start default runners on launch
+- 🧠 **KV cache persistence** - Disk-backed per-chat KV snapshots: switching chats, models, or restarting FlexLLama no longer costs a full re-prefill
 - 🔄 **Model switching** - Dynamically load/unload models as needed
 - ⏱️ **Auto model unload** - Automatically unload models after a configurable idle timeout
 
@@ -252,6 +253,12 @@ If you prefer to run the steps manually, follow this guide:
 1. **Open the dashboard:**
    Access the FlexLLama dashboard in your browser: `http://localhost:8090`
 
+> **🧠 KV cache persistence in Docker:** snapshot files are written to
+> `kv_snapshots/{runner_name}` inside the container. To keep them across
+> container rebuilds, mount a writable volume, e.g.
+> `-v $(pwd)/kv_snapshots:/app/kv_snapshots`, and enable `kv_cache` in
+> `docker/config.json` (see [KV Cache Persistence](#kv-cache-persistence)).
+
 ______________________________________________________________________
 
 ### Vulkan GPU Support
@@ -307,6 +314,39 @@ FlexLLama is highly configurable through the `config.json` file. You can set up 
 - Use `config_example.json` as a reference
 - Validate your configuration: `python backend/config.py config.json`
 - Set `auto_start_runners: true` to automatically load models on startup
+
+### KV Cache Persistence
+
+Long contexts make re-prefilling expensive: switching between chats, switching
+models, or restarting FlexLLama normally means reprocessing the whole
+conversation. The optional per-runner `kv_cache` block persists llama.cpp slot
+state (KV cache + prompt tokens) to disk, so returning to a chat resumes
+where it left off instead of re-prefilling from scratch:
+
+```json
+{
+    "runner1": {
+        "path": "/path/to/llama-server",
+        "kv_cache": {
+            "enabled": true,
+            "dir": "kv_snapshots/runner1",
+            "refresh_interval_seconds": 300,
+            "max_snapshots": 4,
+            "auto_restore_on_start": true
+        }
+    }
+}
+```
+
+Snapshots are kept per chat (one stable file per conversation, LRU-capped per
+model) and are saved on chat switches, before every runner stop, and on an
+idle refresh interval; the tracked chat is restored automatically after a
+runner (re)start. The feature is fail-soft (persistence errors never break
+request forwarding) and only affects `/v1/chat/completions`. Per-runner
+management endpoints are available under `/v1/runners/{runner_name}/kv`.
+
+📖 **See [CONFIGURATION.md](CONFIGURATION.md#kv-cache-configuration) for the
+full option reference and behavior details.**
 
 ## Testing
 
@@ -372,9 +412,11 @@ python tests/test_model_switching.py config.json
 - Runner state management and health monitoring
 - Proper cleanup of resources
 
-#### Audio, MCP, and Throughput Tests
+#### Audio, MCP, Throughput, and KV Cache Tests
 
-These cover the audio endpoints, the optional MCP proxy, and the token-throughput collector. They differ in whether a running server is required:
+These cover the audio endpoints, the optional MCP proxy, the token-throughput
+collector, and KV cache persistence. They differ in whether a running server
+is required:
 
 ```bash
 # Audio endpoint routing/proxying (server must be RUNNING):
@@ -386,6 +428,10 @@ python tests/test_mcp.py
 
 # Token-throughput collector unit checks (offline, no server needed):
 python tests/test_throughput.py
+
+# KV cache persistence: chat identity, config validation, snapshot store,
+# lifecycle hooks, and API wiring (offline, no server needed):
+python tests/test_kv_cache.py
 ```
 
 **What they test:**
@@ -393,6 +439,7 @@ python tests/test_throughput.py
 - `test_audio.py` - Audio model routing, multipart/binary proxying, and clean error handling (never an unhandled 500)
 - `test_mcp.py` - MCP config validation, model selector routing rules, and the disabled-route 404 backward-compat guarantee
 - `test_throughput.py` - The throughput collector's rolling 1-min average/peak, bounded history, and JSON-safe snapshots
+- `test_kv_cache.py` - Chat identity computation, `kv_cache` config validation, snapshot store (LRU, free-space guard, state file), lifecycle hooks (auto-restore, save-before-stop, `--slot-save-path` injection), and the KV API endpoints
 
 ## License
 

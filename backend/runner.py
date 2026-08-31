@@ -18,6 +18,8 @@ import json
 import psutil
 import shlex
 
+from .kv_cache import KVSnapshotStore
+
 # Get logger for this module
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,10 @@ class RunnerProcess:
         self.active_requests = 0
         self.last_activity_ts = None
         self._request_lock = asyncio.Lock()
+
+        # KV cache persistence store (injected by RunnerManager when the
+        # runner's kv_cache block is enabled; None otherwise).
+        self.kv_store = None
 
     def _kill_process_tree(self, pid: int):
         """Terminate a process and all of its children, using an OS-specific method."""
@@ -357,6 +363,17 @@ class RunnerProcess:
                     self.last_activity_ts = time.time()
                     self.active_requests = 0
                     self.is_starting = False
+                    # Optional: warm the slot from the latest snapshot after
+                    # a (re)start so the last chat does not pay a full
+                    # re-prefill. Fail-soft: never breaks startup.
+                    if self.kv_store is not None:
+                        try:
+                            await self.kv_store.auto_restore_on_start(model_alias)
+                        except Exception as e:
+                            logger.warning(
+                                f"KV cache auto-restore failed for runner "
+                                f"{self.runner_name}: {e}"
+                            )
                     return True
 
                 # Check if process is still running
@@ -408,6 +425,17 @@ class RunnerProcess:
                 f"Stopping runner {self.runner_name} (current model: {current_alias})"
             )
 
+            # Persist the tracked chat's KV state to disk before the process
+            # dies (manual stop, model switch, auto-unload, FlexLLama shutdown).
+            if self.kv_store is not None:
+                try:
+                    await self.kv_store.save_before_stop()
+                except Exception as e:
+                    logger.warning(
+                        f"KV cache save before stop failed for runner "
+                        f"{self.runner_name}: {e}"
+                    )
+
             pid = self.process.pid
             loop = asyncio.get_event_loop()
 
@@ -441,6 +469,10 @@ class RunnerProcess:
             self.last_activity_ts = None
             self.active_requests = 0
 
+            # The slot state is gone with the process; drop the tracking.
+            if self.kv_store is not None:
+                self.kv_store.mark_runner_stopped()
+
             # Wait to offload GPU memory
             await asyncio.sleep(0.5)
 
@@ -460,6 +492,9 @@ class RunnerProcess:
             # Reset auto-unload state
             self.last_activity_ts = None
             self.active_requests = 0
+            # The slot state is gone with the process; drop the tracking.
+            if self.kv_store is not None:
+                self.kv_store.mark_runner_stopped()
             return False
 
     async def is_running(self):
@@ -823,6 +858,12 @@ class RunnerProcess:
         # Add extra arguments
         cmd.extend(self.runner_config.get("extra_args", []))
 
+        # Add KV cache persistence directory (enables llama-server's
+        # /slots/{id}?action=save|restore API). Skip if the user already
+        # provided --slot-save-path via extra_args or model args.
+        if self.kv_store is not None and "--slot-save-path" not in cmd:
+            cmd.extend(["--slot-save-path", str(self.kv_store.snapshot_dir)])
+
         return cmd, env_from_path
 
     def _build_command(self, model_config):
@@ -885,6 +926,9 @@ class RunnerManager:
         self._auto_unload_task = None
         self._watchdog_running = False
 
+        # KV cache persistence periodic refresh
+        self._kv_refresh_task = None
+
         self._initialize_runners()
 
     def _initialize_runners(self):
@@ -897,6 +941,31 @@ class RunnerManager:
             self.runners[runner_name] = RunnerProcess(
                 runner_name, runner_config, host, port, self.session_log_dir
             )
+
+            # Attach a KV snapshot store when persistence is enabled for
+            # this runner. A setup failure (e.g. non-writable dir) disables
+            # persistence for the runner but never prevents startup.
+            kv_config = self.config_manager.get_kv_cache_config(runner_name)
+            if kv_config.get("enabled"):
+                try:
+                    self.runners[runner_name].kv_store = KVSnapshotStore(
+                        runner_name,
+                        host,
+                        port,
+                        kv_config["dir"],
+                        max_snapshots=kv_config["max_snapshots"],
+                        refresh_interval_seconds=kv_config["refresh_interval_seconds"],
+                        auto_restore_on_start=kv_config["auto_restore_on_start"],
+                    )
+                    logger.info(
+                        f"KV cache persistence enabled for runner "
+                        f"{runner_name} (dir: {self.runners[runner_name].kv_store.snapshot_dir})"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Runner {runner_name}: KV cache setup failed, "
+                        f"continuing without persistence: {e}"
+                    )
 
         # Assign models to runners
         for model in self.config_manager.get_config()["models"]:
@@ -1072,6 +1141,52 @@ class RunnerManager:
             except Exception as e:
                 logger.error(f"Error in auto-unload watchdog: {e}")
 
+    async def start_kv_cache_refresh(self) -> None:
+        """Start the periodic KV snapshot refresh task (if any store exists)."""
+        if self._kv_refresh_task is None and any(
+            runner.kv_store is not None and runner.kv_store.refresh_interval_seconds > 0
+            for runner in self.runners.values()
+        ):
+            logger.info("Starting KV cache refresh loop")
+            self._kv_refresh_task = asyncio.create_task(self._kv_cache_refresh_loop())
+
+    async def stop_kv_cache_refresh(self) -> None:
+        """Stop the periodic KV snapshot refresh task."""
+        if self._kv_refresh_task:
+            logger.info("Stopping KV cache refresh loop")
+            self._kv_refresh_task.cancel()
+            try:
+                await self._kv_refresh_task
+            except asyncio.CancelledError:
+                pass
+            self._kv_refresh_task = None
+
+    async def _kv_cache_refresh_loop(self) -> None:
+        """Periodically save the tracked chat state while runners are idle.
+
+        Bounded staleness: if FlexLLama or a runner dies without running the
+        stop hook, the newest snapshot on disk is at most
+        refresh_interval_seconds old.
+        """
+        while True:
+            try:
+                await asyncio.sleep(1)
+                for runner_name, runner in self.runners.items():
+                    store = runner.kv_store
+                    if store is None or store.refresh_interval_seconds <= 0:
+                        continue
+                    if runner.is_starting:
+                        continue
+                    if not await runner.is_running():
+                        continue
+                    if runner.active_requests > 0:
+                        continue
+                    await store.refresh_tick()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in KV cache refresh loop: {e}")
+
     async def is_runner_running(self, runner_name):
         """Check if a runner process is running.
 
@@ -1124,6 +1239,21 @@ class RunnerManager:
 
         runner_name = self.model_runner_map[model_alias]
         return self.runners.get(runner_name)
+
+    def get_kv_store_for_model(self, model_alias):
+        """Get the KV snapshot store for a model's runner, if enabled.
+
+        Args:
+            model_alias: Alias of the model.
+
+        Returns:
+            The runner's KVSnapshotStore, or None if persistence is not
+            enabled for that model's runner.
+        """
+        runner = self.get_runner_for_model(model_alias)
+        if runner is None:
+            return None
+        return runner.kv_store
 
     def get_default_audio_model_alias(self) -> str | None:
         """Get the alias of the first configured audio model.
