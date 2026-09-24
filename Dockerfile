@@ -18,7 +18,11 @@ RUN apt-get update && apt-get install -y \
 # Clone and build llama.cpp
 WORKDIR /build
 
-RUN git clone https://github.com/ggerganov/llama.cpp.git && \
+# Pinned llama.cpp release (tag or branch). Upstream master regularly removes
+# CLI flags, so bump this deliberately: --build-arg LLAMA_CPP_REF=vX.Y.Z
+ARG LLAMA_CPP_REF=v0.5.0
+
+RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git && \
     cd llama.cpp && \
     cmake -B build \
         -DGGML_BLAS=ON \
