@@ -37,7 +37,7 @@ RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/
      mkdir -p /opt/llama.cpp/lib && \
      find build -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; && \
      # Specifically ensure libmtmd.so is copied
-     find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true && \
+     { find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true; } && \
      # List what we have for debugging
      echo "=== Libraries in /opt/llama.cpp/lib ===" && \
      ls -la /opt/llama.cpp/lib/

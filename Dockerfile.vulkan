@@ -39,7 +39,7 @@ RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/
     cmake --install build && \
     mkdir -p /opt/llama.cpp/lib && \
     find build -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; && \
-    find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true
+    { find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true; }
 
 # Stage 2: Runtime environment with AMD/Intel Vulkan support
 FROM ubuntu:24.04
