@@ -7,10 +7,73 @@ It ensures that all required fields are present and that values are of the corre
 
 import json
 import os
+import re
 import logging
 
 # Get logger for this module
 logger = logging.getLogger(__name__)
+
+# Valid values for llama-server's --load-mode (added upstream 2026-07-23; it
+# replaced --mlock/--mmap/--no-mmap/--direct-io, which were removed 2026-09-09).
+LOAD_MODES = ("auto", "none", "mmap", "mlock", "mmap+mlock", "dio")
+
+# Built-in template names are short identifiers ("gemma", "mistral-v7", "chatml");
+# anything else is treated as inline Jinja source.
+_BUILTIN_TEMPLATE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def is_builtin_chat_template_name(value) -> bool:
+    """Return True if a chat_template value is a built-in template name.
+
+    llama-server treats --chat-template as inline Jinja source whenever Jinja is
+    enabled (the default since late 2025), so a built-in name such as "gemma"
+    only works together with --no-jinja.
+    """
+    return isinstance(value, str) and bool(_BUILTIN_TEMPLATE_NAME_RE.match(value))
+
+
+# Model options FlexLLama understands; anything else triggers a typo warning.
+KNOWN_MODEL_KEYS = {
+    "runner",
+    "model",
+    "model_alias",
+    "type",
+    "mmproj",
+    "audio_encoder",
+    "talker_model",
+    "code2wav_model",
+    "model_vocoder",
+    "n_ctx",
+    "n_batch",
+    "u_batch",
+    "n_threads",
+    "main_gpu",
+    "n_gpu_layers",
+    "tensor_split",
+    "split_mode",
+    "offload_kqv",
+    "load_mode",
+    "use_mlock",
+    "flash_attn",
+    "cache-type-k",
+    "cache-type-v",
+    "chat_template",
+    "jinja",
+    "embedding",
+    "reranking",
+    "pooling",
+    "rope-scaling",
+    "rope-scale",
+    "yarn-orig-ctx",
+    "mcp",
+    "env",
+    "inherit_env",
+    "args",
+}
+
+# Model options that only a TTS-capable runner understands; upstream
+# llama-server has no such flags and no /v1/audio/speech endpoint.
+TTS_MODEL_KEYS = ("talker_model", "code2wav_model", "model_vocoder")
 
 
 class ConfigManager:
@@ -113,6 +176,21 @@ class ConfigManager:
             self._validate_runner_config(
                 self.config[runner_name], runner_name, used_ports
             )
+
+        # TTS options need a TTS-capable runner: upstream llama-server has no
+        # --talker-model/--code2wav-model/--model-vocoder flags and no
+        # /v1/audio/speech endpoint, so it would refuse to start.
+        for i, model in enumerate(self.config["models"]):
+            tts_keys = [key for key in TTS_MODEL_KEYS if key in model]
+            runner_type = self.config[model["runner"]].get("type")
+            if tts_keys and runner_type == "llama-server":
+                logger.warning(
+                    f"Model {i}: {', '.join(tts_keys)} set on runner "
+                    f"'{model['runner']}' of type 'llama-server'. Upstream "
+                    "llama-server does not support these options or "
+                    "/v1/audio/speech; use a TTS-capable server as this runner "
+                    "and give it a different 'type'."
+                )
 
         logger.info("Configuration validation successful")
 
@@ -382,6 +460,12 @@ class ConfigManager:
             mcp["enabled"] = False
         elif not isinstance(mcp["enabled"], bool):
             raise ValueError("mcp.enabled must be a boolean")
+        elif mcp["enabled"]:
+            logger.warning(
+                "The MCP proxy is EXPERIMENTAL. Upstream llama-server does not serve "
+                "an MCP endpoint (it is only an MCP client for its web UI), so "
+                "mcp-tagged models must run a server that serves 'mcp.upstream_path'."
+            )
 
         if "endpoint" not in mcp:
             mcp["endpoint"] = "/v1/mcp"
@@ -466,19 +550,35 @@ class ConfigManager:
                     "'mmproj' is set; speech-input audio models usually require one."
                 )
 
+        unknown_keys = sorted(set(model) - KNOWN_MODEL_KEYS)
+        if unknown_keys:
+            logger.warning(
+                f"Model {index}: unknown option(s) {', '.join(unknown_keys)} will be "
+                "ignored. Check for typos, or pass llama-server flags via 'args'."
+            )
+
         int_fields = [
             "n_ctx",
             "n_batch",
             "u_batch",
             "n_threads",
             "main_gpu",
-            "n_gpu_layers",
-            "rope-scale",
             "yarn-orig-ctx",
         ]
         for field in int_fields:
             if field in model and not isinstance(model[field], int):
                 raise ValueError(f"Model {index}: {field} must be an integer")
+
+        # n_gpu_layers: an integer, or "auto"/"all" (llama.cpp builds from
+        # late 2025 onward; "auto" is the upstream default)
+        if "n_gpu_layers" in model:
+            ngl = model["n_gpu_layers"]
+            if isinstance(ngl, bool) or not (
+                isinstance(ngl, int) or ngl in ("auto", "all")
+            ):
+                raise ValueError(
+                    f"Model {index}: n_gpu_layers must be an integer, 'auto' or 'all'"
+                )
 
         str_fields = [
             "mmproj",
@@ -500,7 +600,10 @@ class ConfigManager:
 
         num_fields = ["rope-scale"]
         for field in num_fields:
-            if field in model and not isinstance(model[field], (int, float)):
+            if field in model and (
+                isinstance(model[field], bool)
+                or not isinstance(model[field], (int, float))
+            ):
                 raise ValueError(f"Model {index}: {field} must be a number")
 
         bool_fields = [
@@ -514,6 +617,41 @@ class ConfigManager:
         for field in bool_fields:
             if field in model and not isinstance(model[field], bool):
                 raise ValueError(f"Model {index}: {field} must be a boolean")
+
+        # load_mode replaces use_mlock (llama-server removed --mlock/--mmap)
+        if "load_mode" in model and model["load_mode"] not in LOAD_MODES:
+            raise ValueError(
+                f"Model {index}: load_mode must be one of {', '.join(LOAD_MODES)}"
+            )
+        if "use_mlock" in model:
+            if "load_mode" in model:
+                logger.warning(
+                    f"Model {index}: both 'use_mlock' and 'load_mode' are set; "
+                    "'use_mlock' is deprecated and will be ignored."
+                )
+            elif model["use_mlock"]:
+                logger.warning(
+                    f"Model {index}: 'use_mlock' is deprecated; it is converted to "
+                    "'load_mode: \"mlock\"' (llama-server --load-mode mlock). "
+                    "Please switch to 'load_mode'."
+                )
+            else:
+                logger.warning(
+                    f"Model {index}: 'use_mlock' is deprecated and has no effect "
+                    "when false; please remove it or use 'load_mode'."
+                )
+
+        # Built-in template names only work with Jinja off (see runner)
+        if model.get("jinja") is True and is_builtin_chat_template_name(
+            model.get("chat_template")
+        ):
+            logger.warning(
+                f"Model {index}: chat_template '{model['chat_template']}' is a "
+                "built-in template name, which llama-server only understands with "
+                "Jinja disabled; 'jinja: true' is ignored for this model. To use a "
+                "Jinja template, set chat_template to the template source or pass "
+                "'--chat-template-file' via 'args'."
+            )
 
         # Validate and normalize flash_attn (supports both boolean and string values)
         if "flash_attn" in model:

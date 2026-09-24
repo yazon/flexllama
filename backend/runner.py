@@ -7,6 +7,7 @@ It supports multiple concurrent runners for different models.
 """
 
 import os
+import re
 import subprocess
 import time
 import logging
@@ -18,8 +19,72 @@ import json
 import psutil
 import shlex
 
+try:
+    from .config import is_builtin_chat_template_name
+except ImportError:  # executed as a script: python backend/runner.py
+    from config import is_builtin_chat_template_name
+
 # Get logger for this module
 logger = logging.getLogger(__name__)
+
+# Legacy loading flags that may still appear in user-supplied args/extra_args,
+# mapped to the equivalent --load-mode value (None means "use the default").
+_LEGACY_LOAD_FLAGS = {
+    "--mlock": "mlock",
+    "--mmap": "mmap",
+    "--no-mmap": "none",
+    "-dio": "dio",
+    "--direct-io": "dio",
+    "-ndio": None,
+    "--no-direct-io": None,
+}
+
+# Matches option names in `llama-server --help` output and in a command line.
+_FLAG_RE = re.compile(r"(?<![\w-])(--?[A-Za-z][A-Za-z0-9-]*)")
+
+# Supported-flag sets per (executable, initial args), probed once per process.
+_SUPPORTED_FLAGS_CACHE: dict[tuple, frozenset | None] = {}
+
+
+def probe_supported_flags(
+    executable: str, initial_args: list[str], env: dict[str, str], timeout: float = 30
+) -> frozenset | None:
+    """Return the set of flags a llama-server binary accepts, or None if unknown.
+
+    Runs `<executable> [initial_args] --help` once and caches the result. Any
+    failure (missing binary, timeout, output that does not look like
+    llama-server help) yields None so callers can fall back to defaults.
+    """
+    key = (executable, tuple(initial_args))
+    if key in _SUPPORTED_FLAGS_CACHE:
+        return _SUPPORTED_FLAGS_CACHE[key]
+
+    flags = None
+    try:
+        result = subprocess.run(
+            [executable, *initial_args, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            check=False,
+        )
+        found = set(_FLAG_RE.findall(f"{result.stdout}\n{result.stderr}"))
+        if "--model" in found and "--port" in found:
+            flags = frozenset(found)
+        else:
+            logger.warning(
+                f"'{executable} --help' did not look like llama-server help; "
+                "skipping flag compatibility checks"
+            )
+    except Exception as e:
+        logger.warning(
+            f"Could not probe supported flags of '{executable}': {e}; "
+            "assuming a current llama-server build"
+        )
+
+    _SUPPORTED_FLAGS_CACHE[key] = flags
+    return flags
 
 
 # Health Status Constants
@@ -71,6 +136,10 @@ class RunnerProcess:
         self.current_model = None  # Track which model is currently loaded
         self.is_starting = False
         self.start_time = None
+
+        # Flags accepted by this runner's binary (None = unknown, assume current
+        # llama-server). Populated before each start by _probe_flags().
+        self.supported_flags: frozenset | None = None
 
         # Auto-unload state tracking
         self.auto_unload_timeout_seconds = runner_config.get(
@@ -257,6 +326,9 @@ class RunnerProcess:
         self.start_time = time.time()
 
         try:
+            # Learn which flags the binary accepts (cached; off the event loop)
+            await self._probe_flags(model_config)
+
             # Build command and parse environment variables
             cmd, env_from_path = self._build_command_and_env(model_config)
 
@@ -547,6 +619,115 @@ class RunnerProcess:
         initial_args = tokens[index:] if index < len(tokens) else []
         return executable, initial_args, env_from_path
 
+    async def _probe_flags(self, model_config: dict) -> None:
+        """Populate self.supported_flags for llama-server runners.
+
+        Only runners of type "llama-server" are probed; other runner types
+        (e.g. a custom TTS server) keep supported_flags = None, which disables
+        compatibility translation and unknown-flag warnings.
+        """
+        if self.runner_config.get("type") != "llama-server":
+            self.supported_flags = None
+            return
+
+        executable, initial_args, env_from_path = self._parse_runner_path_with_env(
+            self.runner_config["path"]
+        )
+        env = self._compose_environment(model_config, env_from_path)
+        loop = asyncio.get_event_loop()
+        self.supported_flags = await loop.run_in_executor(
+            None, probe_supported_flags, executable, initial_args, env
+        )
+
+    def _supports(self, flag: str, default: bool = True) -> bool:
+        """Whether the runner binary accepts `flag` (`default` when unknown)."""
+        if self.supported_flags is None:
+            return default
+        return flag in self.supported_flags
+
+    def _load_mode_args(self, model_config: dict) -> list[str]:
+        """Translate load_mode / deprecated use_mlock into llama-server args.
+
+        Emits `--load-mode MODE` for current builds and falls back to the
+        legacy --mlock/--no-mmap/--direct-io flags for builds that predate
+        --load-mode.
+        """
+        mode = model_config.get("load_mode")
+        if mode is None and model_config.get("use_mlock", False):
+            # Same mapping upstream used for its --mlock deprecation shim
+            mode = "mlock"
+        if mode is None:
+            return []
+
+        if self._supports("--load-mode"):
+            return ["--load-mode", mode]
+
+        legacy = {
+            "mlock": ["--mlock"],
+            "mmap+mlock": ["--mlock"],
+            "none": ["--no-mmap"],
+            "dio": ["--direct-io"],
+        }.get(mode, [])
+        logger.info(
+            f"Runner {self.runner_name}: binary has no --load-mode; "
+            f"using legacy flags {legacy or '(default)'} for load_mode '{mode}'"
+        )
+        return legacy
+
+    def _translate_legacy_load_flags(
+        self, args: list[str], load_mode_set: bool = False
+    ) -> list[str]:
+        """Rewrite removed --mlock/--mmap/--direct-io flags in user args.
+
+        llama-server removed these flags in favor of --load-mode, and rejects
+        unknown flags at startup. When the binary supports --load-mode, the
+        legacy flags are replaced by a single `--load-mode MODE` (last one
+        wins, matching upstream semantics), or dropped when load_mode_set says
+        the config already produced a --load-mode. Older binaries get args
+        unchanged.
+        """
+        if not self._supports("--load-mode"):
+            return args
+
+        legacy_found = [a for a in args if a in _LEGACY_LOAD_FLAGS]
+        if not legacy_found:
+            return args
+
+        kept = [a for a in args if a not in _LEGACY_LOAD_FLAGS]
+        mode = _LEGACY_LOAD_FLAGS[legacy_found[-1]]
+        if load_mode_set:
+            replacement = "nothing (load_mode is already set in the config)"
+        elif mode is not None:
+            kept.extend(["--load-mode", mode])
+            replacement = f"--load-mode {mode}"
+        else:
+            replacement = "the default load mode"
+        logger.warning(
+            f"Runner {self.runner_name}: deprecated llama-server flag(s) "
+            f"{', '.join(legacy_found)} in args were replaced by {replacement}; "
+            "please use the load_mode model option instead"
+        )
+        return kept
+
+    def _warn_unsupported_flags(self, cmd: list[str]) -> None:
+        """Log flags in cmd that the probed binary does not recognise."""
+        if self.supported_flags is None:
+            return
+        unknown = []
+        for token in cmd[1:]:
+            # llama.cpp accepts --flag=value and converts "_" to "-" in names
+            name = token.split("=", 1)[0].replace("_", "-")
+            if not _FLAG_RE.fullmatch(name) or name in self.supported_flags:
+                continue
+            if name not in unknown:
+                unknown.append(name)
+        if unknown:
+            logger.warning(
+                f"Runner {self.runner_name}: '{cmd[0]}' does not recognise "
+                f"{', '.join(unknown)}; llama-server will most likely refuse to start. "
+                "Check your model/runner configuration against your llama.cpp version."
+            )
+
     def _compose_environment(
         self, model_config: dict, env_from_path: dict[str, str]
     ) -> dict[str, str]:
@@ -684,6 +865,18 @@ class RunnerProcess:
                 f"Command building: After n_threads, {len(cmd)} items: {cmd[-2:]}"
             )
 
+        # Jinja must come before --chat-template: llama-server treats the
+        # template as inline Jinja source whenever Jinja is on (the default in
+        # current builds), so built-in names like "gemma" need --no-jinja.
+        jinja = model_config.get("jinja")
+        if is_builtin_chat_template_name(model_config.get("chat_template")):
+            if self._supports("--no-jinja"):
+                cmd.append("--no-jinja")
+        elif jinja is True:
+            cmd.append("--jinja")
+        elif jinja is False and self._supports("--no-jinja"):
+            cmd.append("--no-jinja")
+
         if "chat_template" in model_config:
             cmd.extend(["--chat-template", model_config["chat_template"]])
             logger.debug(
@@ -718,10 +911,6 @@ class RunnerProcess:
                 f"Command building: After no-kv-offload, {len(cmd)} items: {cmd[-1:]}"
             )
 
-        if model_config.get("jinja", False):
-            cmd.append("--jinja")
-            logger.debug(f"Command building: After jinja, {len(cmd)} items: {cmd[-1:]}")
-
         if "pooling" in model_config:
             cmd.extend(["--pooling", model_config["pooling"]])
             logger.debug(
@@ -734,10 +923,11 @@ class RunnerProcess:
                 f"Command building: After flash_attn, {len(cmd)} items: {cmd[-2:]}"
             )
 
-        if model_config.get("use_mlock", False):
-            cmd.append("--mlock")
+        load_mode_args = self._load_mode_args(model_config)
+        if load_mode_args:
+            cmd.extend(load_mode_args)
             logger.debug(
-                f"Command building: After use_mlock, {len(cmd)} items: {cmd[-1:]}"
+                f"Command building: After load_mode, {len(cmd)} items: {load_mode_args}"
             )
 
         if "main_gpu" in model_config:
@@ -800,11 +990,15 @@ class RunnerProcess:
                 f"Command building: After yarn-orig-ctx, {len(cmd)} items: {cmd[-2:]}"
             )
 
+        # User-supplied args (model "args" + runner "extra_args")
+        load_mode_set = "--load-mode" in load_mode_args
+        user_args: list[str] = []
+
         # Add model-specific arguments
         if "args" in model_config and model_config["args"].strip():
             try:
                 model_args = shlex.split(model_config["args"].strip())
-                cmd.extend(model_args)
+                user_args.extend(model_args)
                 logger.debug(
                     f"Command building: After model args, {len(cmd)} items: added {len(model_args)} args"
                 )
@@ -815,13 +1009,17 @@ class RunnerProcess:
                 )
                 # Fallback to simple split for malformed arguments
                 model_args = model_config["args"].strip().split()
-                cmd.extend(model_args)
+                user_args.extend(model_args)
                 logger.debug(
                     f"Command building: Using fallback split, {len(cmd)} items: added {len(model_args)} args"
                 )
 
         # Add extra arguments
-        cmd.extend(self.runner_config.get("extra_args", []))
+        user_args.extend(self.runner_config.get("extra_args", []))
+
+        cmd.extend(self._translate_legacy_load_flags(user_args, load_mode_set))
+
+        self._warn_unsupported_flags(cmd)
 
         return cmd, env_from_path
 
