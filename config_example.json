@@ -61,6 +61,16 @@
         "extra_args": [],
         "auto_unload_timeout_seconds": 0
     },
+    "runner-tts": {
+        "type": "tts-server",
+        "path": "/path/to/your-tts-server",
+        "host": "127.0.0.1",
+        "port": 8088,
+        "inherit_env": true,
+        "env": {},
+        "extra_args": [],
+        "auto_unload_timeout_seconds": 0
+    },
     "models": [
         {
             "runner": "runner1",
@@ -72,7 +82,7 @@
             "n_threads": 4,
             "offload_kqv": true,
             "flash_attn": "on",
-            "use_mlock": true,
+            "load_mode": "mlock",
             "main_gpu": 0,
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 99,
@@ -95,11 +105,10 @@
             "chat_template": "mistral-instruct",
             "offload_kqv": false,
             "flash_attn": "off",
-            "use_mlock": true,
+            "load_mode": "mlock",
             "main_gpu": 0,
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 50,
-            "jinja": true,
             "split_mode": "row",
             "cache-type-k": "q8_0",
             "cache-type-v": "q8_0",
@@ -109,7 +118,7 @@
             "runner": "runner2",
             "model": "/path/to/model3.gguf",
             "model_alias": "model3",
-            "args": "--ctx-size 8000 --batch-size 512 --threads 8 --flash-attn on --mlock --device Vulkan1"
+            "args": "--ctx-size 8000 --batch-size 512 --threads 8 --flash-attn on --load-mode mlock --device Vulkan1"
         },
         {
             "runner": "runner1",
@@ -122,7 +131,7 @@
             "chat_template": "gemma",
             "offload_kqv": true,
             "flash_attn": "auto",
-            "use_mlock": true,
+            "load_mode": "mlock",
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 99,
             "rope-scaling": "linear",
@@ -139,7 +148,7 @@
             "n_threads": 8,
             "offload_kqv": true,
             "flash_attn": "on",
-            "use_mlock": true,
+            "load_mode": "mlock",
             "reranking": true,
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 99,
@@ -154,7 +163,7 @@
             "n_threads": 8,
             "offload_kqv": true,
             "flash_attn": "on",
-            "use_mlock": true,
+            "load_mode": "mlock",
             "embedding": true,
             "pooling": "cls",
             "tensor_split": [1.0, 0.0],
@@ -172,7 +181,7 @@
             "args": ""
         },
         {
-            "runner": "runner-audio",
+            "runner": "runner-tts",
             "model": "/path/to/qwen3-omni.gguf",
             "model_alias": "qwen3-omni-tts",
             "type": "audio",

@@ -21,8 +21,8 @@
 - 📊 **Real-time dashboard** - Monitor model status, live GPU telemetry, and per-model token throughput in a web interface
 - 🤖 **Chat & Completions** - Full chat and text completion support
 - 🔍 **Embeddings & Reranking** - Supports models for embeddings and reranking
-- 🎙️ **Audio endpoints** - Speech-to-text and text-to-speech proxied to audio models (Voxtral, Qwen3-Omni, and more)
-- 🛠️ **MCP proxy** - Optional unified Model Context Protocol endpoint that routes requests to `mcp`-tagged models
+- 🎙️ **Audio endpoints** - Speech-to-text proxied to audio models (Voxtral, Qwen3-Omni, and more); text-to-speech proxied to a TTS-capable runner
+- 🛠️ **MCP proxy (experimental)** - Optional unified Model Context Protocol endpoint that routes requests to `mcp`-tagged models
 - ⚡ **Auto-start** - Automatically start default runners on launch
 - 🔄 **Model switching** - Dynamically load/unload models as needed
 - ⏱️ **Auto model unload** - Automatically unload models after a configurable idle timeout
@@ -295,6 +295,12 @@ For AMD ROCm systems, you may need to add `/dev/kfd` device mapping in `docker-c
 
 **Note**: Vulkan support on Windows with Docker is limited. For best results on Windows, use WSL2 with the Linux instructions or use the CUDA backend instead.
 
+**llama.cpp version:** the Docker images build a pinned llama.cpp release (`LLAMA_CPP_REF`, currently `v0.5.0`) rather than the latest master, because upstream master regularly removes command-line flags. To build a different release, pass it as a build argument:
+
+```bash
+docker build -f Dockerfile.cuda --build-arg LLAMA_CPP_REF=v0.5.0 -t flexllama-gpu:latest .
+```
+
 ## Configuration
 
 FlexLLama is highly configurable through the `config.json` file. You can set up multiple runners, distribute models across GPUs, configure auto-unload timeouts, set environment variables, and much more.
@@ -372,27 +378,13 @@ python tests/test_model_switching.py config.json
 - Runner state management and health monitoring
 - Proper cleanup of resources
 
-#### Audio, MCP, and Throughput Tests
+#### llama.cpp Compatibility Tests
 
-These cover the audio endpoints, the optional MCP proxy, and the token-throughput collector. They differ in whether a running server is required:
+`test_llama_compat.py` checks how model options are translated into llama-server arguments for current and older llama.cpp builds (`load_mode` / deprecated `use_mlock`, Jinja and built-in chat templates, unknown-flag warnings) and the related config validation. It runs offline and needs no server, model or llama-server binary.
 
 ```bash
-# Audio endpoint routing/proxying (server must be RUNNING):
-python tests/test_audio.py
-
-# MCP proxy: offline config + selector checks always run; pass a running
-# server with mcp.enabled (and --mcp-enabled) to also run the online JSON-RPC checks:
-python tests/test_mcp.py
-
-# Token-throughput collector unit checks (offline, no server needed):
-python tests/test_throughput.py
+python tests/test_llama_compat.py
 ```
-
-**What they test:**
-
-- `test_audio.py` - Audio model routing, multipart/binary proxying, and clean error handling (never an unhandled 500)
-- `test_mcp.py` - MCP config validation, model selector routing rules, and the disabled-route 404 backward-compat guarantee
-- `test_throughput.py` - The throughput collector's rolling 1-min average/peak, bounded history, and JSON-safe snapshots
 
 ## License
 

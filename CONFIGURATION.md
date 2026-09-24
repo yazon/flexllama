@@ -151,7 +151,7 @@ FlexLLama supports configurable timeouts for long-running requests:
 ```
 
 - `request_timeout_seconds`: Timeout for non-streaming requests (default: 1800 = 30 minutes)
-- `streaming_timeout_seconds`: Timeout for streaming requests (default: 0 = no timeout)
+- `streaming_timeout_seconds`: Timeout for streaming requests (default: 3600 = 1 hour; set `0` to disable the timeout)
 
 **Note:** The server keepalive timeout is set to 60 minutes by default to support long-running model inference.
 
@@ -240,7 +240,29 @@ The feature supports both NVIDIA and AMD tools when present:
 - Runner-to-GPU associations are based on model configuration (`main_gpu`, `tensor_split`) and are labeled as advisory.
 - The `/v1/metrics/gpus` endpoint is rate-limited to prevent abuse.
 
-## MCP Proxy Configuration
+## Throughput Metrics Configuration
+
+FlexLLama records per-model token throughput (generation and prompt tokens/sec) from the `timings` and `usage` data llama-server returns, and shows it in the dashboard. It is event-driven (nothing is polled) and enabled by default.
+
+```json
+{
+    "metrics": {
+        "throughput": {
+            "enabled": true,
+            "history_points": 60,
+            "rate_limit_requests_per_minute": 120
+        }
+    }
+}
+```
+
+- `enabled`: Enable or disable throughput tracking (default: `true`).
+- `history_points`: Number of recent completed-request samples kept per model (default: `60`).
+- `rate_limit_requests_per_minute`: Per-IP rate limit for the `/v1/metrics/throughput` endpoint (default: `120`).
+
+## MCP Proxy Configuration (Experimental)
+
+> **Experimental:** upstream `llama-server` does not currently serve an MCP endpoint. It only acts as an MCP *client* for its built-in web UI (`--mcp-servers-config`). The proxy is useful when the `mcp`-tagged model's runner is a server that does serve MCP at `upstream_path`; against a stock `llama-server` the upstream returns 404. FlexLLama logs a warning at startup when the proxy is enabled.
 
 FlexLLama can expose a single Model Context Protocol (MCP) endpoint that forwards requests to one of your models. It is **off by default** — when the `mcp` block is absent or `enabled` is `false`, nothing changes.
 
@@ -267,12 +289,13 @@ To turn it on, add an `mcp` block and tag the model(s) it should use with `"mcp"
 - `enabled`: Turn the MCP endpoint on or off (default: `false`).
 - `endpoint`: The path FlexLLama listens on (default: `/v1/mcp`).
 - `upstream_path`: The path on the model's llama-server that requests are forwarded to (default: `/mcp`).
+- `rate_limit_requests_per_minute`: Per-IP rate limit for the MCP endpoint (default: `120`).
 
 Once enabled, send your MCP (JSON-RPC) requests to `POST http://localhost:8080/v1/mcp`. If you tag more than one model, include a `"model"` field in the request to pick one; otherwise the first `mcp`-tagged model is used.
 
 > **Tip:** give the MCP model its own runner/port so an MCP request doesn't unload another model sharing that runner.
 >
-> **Note:** MCP support in llama.cpp is still evolving. If your `llama-server` build doesn't serve the MCP path, FlexLLama simply passes the upstream response back (it won't crash), and you can point `upstream_path` at wherever a future build serves it.
+> **Note:** If the runner doesn't serve the MCP path, FlexLLama simply passes the upstream response back (it won't crash), and you can point `upstream_path` at wherever your server serves it.
 
 ## Configuration Options Reference
 
@@ -302,9 +325,11 @@ Once enabled, send your MCP (JSON-RPC) requests to `POST http://localhost:8080/v
 - `mmproj`: Path to multimodal projection file (for vision models)
 - `type`: Model type, `"text"` (default) or `"audio"`. Optional; when omitted the model is treated as text, so existing configs are unaffected.
 - `audio_encoder`: Path to the audio multimodal projector gguf (passed to llama-server as `--mmproj`). Use for speech-input models like Voxtral, Ultravox, Qwen2-Audio, and Qwen3-ASR. If both `mmproj` and `audio_encoder` are set, `mmproj` wins and `audio_encoder` is ignored (llama-server rejects a duplicate `--mmproj`).
-- `talker_model`: Path to the qwen3-omni talker gguf (passed as `--talker-model`). Enables the upstream `/v1/audio/speech` endpoint. Requires a llama-server build with TTS support.
-- `code2wav_model`: Path to the qwen3-omni code2wav (talker code detokenizer) gguf (passed as `--code2wav-model`).
-- `model_vocoder`: Path to a vocoder gguf (passed as `--model-vocoder`).
+- `talker_model`: Path to a talker gguf (passed as `--talker-model`). For text-to-speech runners.
+- `code2wav_model`: Path to a code2wav (talker code detokenizer) gguf (passed as `--code2wav-model`). For text-to-speech runners.
+- `model_vocoder`: Path to a vocoder gguf (passed as `--model-vocoder`). For text-to-speech runners.
+
+  > **TTS runners:** upstream `llama-server` has no `/v1/audio/speech` endpoint and does not accept these three flags (`--model-vocoder` was removed in August 2026), so a `llama-server` runner would refuse to start. Use them with a TTS-capable server as the runner, and give that runner a `type` other than `"llama-server"` (for example `"tts-server"`). The server must accept llama-server-style arguments (`--model`, `--host`, `--port`, ...), because FlexLLama passes the same core arguments to every runner.
 - `mcp`: Set to `true` to tag a model as a target for the unified `/v1/mcp` endpoint. Pure metadata (it is never passed to llama-server); see [MCP Proxy Configuration](#mcp-proxy-configuration).
 
 #### Performance & Memory
@@ -314,22 +339,23 @@ Once enabled, send your MCP (JSON-RPC) requests to `POST http://localhost:8080/v
 - `u_batch`: Physical batch size for prompt processing (e.g., 64, 128)
 - `n_threads`: Number of CPU threads to use
 - `main_gpu`: Which GPU to use (0, 1, 2...)
-- `n_gpu_layers`: How many layers to offload to GPU (99 for all layers)
+- `n_gpu_layers`: How many layers to offload to GPU: a number (99 for all layers), `"auto"` (let llama-server fit layers to free VRAM; the upstream default) or `"all"`. `"auto"`/`"all"` need a llama.cpp build from late 2025 or newer.
 - `tensor_split`: Array defining how to split model across GPUs (e.g., [1.0, 0.0])
 - `offload_kqv`: Whether to offload key-value cache to GPU (`true`/`false`)
-- `use_mlock`: Lock model in RAM to prevent swapping (`true`/`false`)
+- `load_mode`: How llama-server loads the model file (passed as `--load-mode`): `"auto"` (upstream default: mmap unless a device doesn't support it), `"none"`, `"mmap"`, `"mlock"` (keep the model in RAM, no swapping), `"mmap+mlock"`, or `"dio"` (DirectIO).
+- `use_mlock`: **Deprecated** — use `load_mode` instead. llama-server removed `--mlock` in September 2026; `use_mlock: true` is converted to `load_mode: "mlock"`. If both are set, `load_mode` wins.
 
 #### Optimization
 
 - `flash_attn`: Flash attention mode - `"on"`, `"off"`, or `"auto"` (case-sensitive). Boolean values (`true`/`false`) are deprecated but still supported for backwards compatibility.
-- `split_mode`: How to split model layers ("row" or other modes)
+- `split_mode`: How to split the model across GPUs: `"none"`, `"layer"` (upstream default), `"row"`, or `"tensor"` (tensor parallelism, experimental, recent builds only)
 - `cache-type-k`: Key cache quantization type (e.g., "q8_0")
 - `cache-type-v`: Value cache quantization type (e.g., "q8_0")
 
 #### Chat & Templates
 
-- `chat_template`: Chat template format (e.g., "mistral-instruct", "gemma")
-- `jinja`: Enable Jinja templating (`true`/`false`)
+- `chat_template`: Either a built-in template name (e.g. `"chatml"`, `"gemma"`, `"llama3"`, `"mistral-v7"`) or inline Jinja template source. Current llama-server treats this value as Jinja source whenever Jinja is enabled, so for a built-in name FlexLLama automatically passes `--no-jinja` (and ignores `jinja: true`, with a warning).
+- `jinja`: `true` passes `--jinja`, `false` passes `--no-jinja`. Jinja is on by default in llama.cpp builds from late 2025 onward, so you normally don't need to set it.
 
 #### Advanced Options
 
@@ -338,6 +364,19 @@ Once enabled, send your MCP (JSON-RPC) requests to `POST http://localhost:8080/v
 - `yarn-orig-ctx`: Original context size for YaRN scaling
 - `pooling`: Pooling method for embeddings (e.g., "cls")
 - `args`: Additional custom arguments to pass directly to llama-server for this specific model (string, e.g., "--custom-flag --param value"). These are applied after all other model parameters and before runner `extra_args`.
+
+Unknown model options are ignored with a warning, so check the log for typos.
+
+## llama.cpp Version Compatibility
+
+llama-server refuses to start when it gets a flag it doesn't recognise, and llama.cpp regularly renames or removes flags. To handle this, FlexLLama runs `llama-server --help` once per runner binary (runners of type `"llama-server"` only) and:
+
+- Emits `--load-mode` on builds that have it, and falls back to `--mlock` / `--no-mmap` / `--direct-io` on older builds.
+- Rewrites removed flags in `args` / `extra_args` (`--mlock`, `--mmap`, `--no-mmap`, `-dio`, `--direct-io`) to `--load-mode` on current builds, and logs a deprecation warning.
+- Only passes `--no-jinja` to builds that support it.
+- Logs a warning that names any flag the binary doesn't recognise, so an incompatible option is easy to spot when a runner fails to start.
+
+If the probe fails, FlexLLama assumes a current llama-server build.
 
 ## Audio Endpoints
 
@@ -360,7 +399,9 @@ To enable them, configure an audio model with `"type": "audio"` and point `audio
 }
 ```
 
-For text-to-speech, also set `talker_model` / `code2wav_model` / `model_vocoder` (see the model options above) and use a TTS-capable model and `llama-server` build.
+Speech-to-text works with upstream `llama-server`: any model whose multimodal projector includes an audio encoder (Voxtral, Ultravox, Qwen2-Audio, Qwen2.5/3-Omni, Qwen3-ASR, Gemma 4 E2B/E4B, ...). llama-server decodes **WAV, MP3 and FLAC** only, and `/v1/audio/transcriptions` supports only `response_format: "json"`.
+
+Text-to-speech (`/v1/audio/speech`) is **not** served by upstream `llama-server`. To use it, run a TTS-capable server as the runner (with a runner `type` other than `"llama-server"`) and set `talker_model` / `code2wav_model` / `model_vocoder` as that server requires (see the model options above).
 
 ### Usage Examples
 
@@ -402,8 +443,6 @@ curl -sS http://localhost:8080/v1/audio/speech \
   -d '{"model": "qwen3-omni-tts", "input": "Hello from FlexLLama.", "voice": "default", "response_format": "wav"}' \
   --output speech.wav
 ```
-
-To check audio works end-to-end, run `python tests/test_audio.py` while FlexLLama is running.
 
 ## Validating Configuration
 
