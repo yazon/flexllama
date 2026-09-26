@@ -41,7 +41,7 @@
             "n_threads": 4,
             "offload_kqv": true,
             "flash_attn": "on",
-            "load_mode": "mlock",
+            "load_mode": "mmap+mlock",
             "main_gpu": 0,
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 99,
@@ -61,7 +61,7 @@
             "main_gpu": 0,
             "tensor_split": [1.0, 0.0],
             "n_gpu_layers": 0,
-            "split_mode": "row",
+            "split_mode": "layer",
             "cache-type-k": "q8_0",
             "cache-type-v": "q8_0",
             "args": ""

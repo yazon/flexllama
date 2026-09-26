@@ -632,14 +632,25 @@ class ConfigManager:
             elif model["use_mlock"]:
                 logger.warning(
                     f"Model {index}: 'use_mlock' is deprecated; it is converted to "
-                    "'load_mode: \"mlock\"' (llama-server --load-mode mlock). "
-                    "Please switch to 'load_mode'."
+                    "'load_mode: \"mmap+mlock\"' (llama-server --load-mode mmap+mlock), "
+                    "which matches the old --mlock behavior. Please switch to "
+                    "'load_mode'."
                 )
             else:
                 logger.warning(
                     f"Model {index}: 'use_mlock' is deprecated and has no effect "
                     "when false; please remove it or use 'load_mode'."
                 )
+
+        # llama.cpp removed row split from the CUDA backend (2026-07-06, #24216);
+        # only a few backends (e.g. SYCL) still implement it.
+        if model.get("split_mode") == "row":
+            logger.warning(
+                f"Model {index}: split_mode 'row' is no longer supported by the "
+                "CUDA/ROCm, Vulkan and Metal backends of current llama.cpp builds "
+                "(the model fails with 'does not support split buffers'). Use "
+                "'layer' (the default) or 'tensor' instead."
+            )
 
         # Built-in template names only work with Jinja off (see runner)
         if model.get("jinja") is True and is_builtin_chat_template_name(

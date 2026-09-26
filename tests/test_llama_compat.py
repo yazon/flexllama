@@ -10,19 +10,25 @@ Usage:
     python tests/test_llama_compat.py
 """
 
+import asyncio
 import json
 import logging
 import os
 import stat
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import runner as runner_module  # noqa: E402
 from backend.config import ConfigManager  # noqa: E402
-from backend.runner import RunnerProcess, probe_supported_flags  # noqa: E402
+from backend.runner import (  # noqa: E402
+    RunnerProcess,
+    legacy_flags_to_load_mode,
+    probe_supported_flags,
+)
 
 # Flag sets standing in for `llama-server --help` of a current build and of a
 # build from before --load-mode existed (mid-2025).
@@ -85,18 +91,20 @@ def value_after(cmd, flag):
 
 
 class LoadModeTests(unittest.TestCase):
-    def test_use_mlock_becomes_load_mode_on_current_build(self):
+    def test_use_mlock_becomes_mmap_mlock_on_current_build(self):
+        # The old --mlock locked the default mmapped model: mmap+mlock
         cmd = build({"use_mlock": True}, CURRENT_FLAGS)
         self.assertNotIn("--mlock", cmd)
-        self.assertEqual(value_after(cmd, "--load-mode"), "mlock")
+        self.assertEqual(value_after(cmd, "--load-mode"), "mmap+mlock")
 
     def test_use_mlock_defaults_to_load_mode_when_build_unknown(self):
         cmd = build({"use_mlock": True}, None)
-        self.assertEqual(value_after(cmd, "--load-mode"), "mlock")
+        self.assertEqual(value_after(cmd, "--load-mode"), "mmap+mlock")
 
     def test_use_mlock_stays_mlock_on_legacy_build(self):
         cmd = build({"use_mlock": True}, LEGACY_FLAGS)
         self.assertIn("--mlock", cmd)
+        self.assertNotIn("--no-mmap", cmd)
         self.assertNotIn("--load-mode", cmd)
 
     def test_use_mlock_false_emits_nothing(self):
@@ -110,7 +118,12 @@ class LoadModeTests(unittest.TestCase):
 
     def test_load_mode_legacy_mapping(self):
         self.assertIn("--no-mmap", build({"load_mode": "none"}, LEGACY_FLAGS))
-        self.assertIn("--mlock", build({"load_mode": "mmap+mlock"}, LEGACY_FLAGS))
+        cmd = build({"load_mode": "mmap+mlock"}, LEGACY_FLAGS)
+        self.assertIn("--mlock", cmd)
+        self.assertNotIn("--no-mmap", cmd)
+        cmd = build({"load_mode": "mlock"}, LEGACY_FLAGS)
+        self.assertIn("--mlock", cmd)
+        self.assertIn("--no-mmap", cmd)
         cmd = build({"load_mode": "auto"}, LEGACY_FLAGS)
         self.assertNotIn("--load-mode", cmd)
 
@@ -118,13 +131,26 @@ class LoadModeTests(unittest.TestCase):
         with self.assertLogs("backend.runner", level="WARNING"):
             cmd = build({"args": "--flash-attn on --mlock"}, CURRENT_FLAGS)
         self.assertNotIn("--mlock", cmd)
-        self.assertEqual(value_after(cmd, "--load-mode"), "mlock")
+        self.assertEqual(value_after(cmd, "--load-mode"), "mmap+mlock")
         self.assertEqual(value_after(cmd, "--flash-attn"), "on")
 
-    def test_legacy_flags_in_extra_args_last_one_wins(self):
+    def test_legacy_flags_in_extra_args_are_combined(self):
         cmd = build({}, CURRENT_FLAGS, extra_args=["--mlock", "--no-mmap"])
-        self.assertEqual(value_after(cmd, "--load-mode"), "none")
+        self.assertEqual(value_after(cmd, "--load-mode"), "mlock")
         self.assertEqual(cmd.count("--load-mode"), 1)
+
+    def test_legacy_flags_to_load_mode(self):
+        cases = {
+            ("--mlock",): "mmap+mlock",
+            ("--no-mmap", "--mlock"): "mlock",
+            ("--no-mmap",): "none",
+            ("--mmap",): "mmap",
+            ("--mlock", "--direct-io"): "dio",
+            ("-dio", "-ndio"): None,
+        }
+        for flags, expected in cases.items():
+            with self.subTest(flags=flags):
+                self.assertEqual(legacy_flags_to_load_mode(list(flags)), expected)
 
     def test_legacy_flag_dropped_when_load_mode_configured(self):
         cmd = build({"load_mode": "mmap", "args": "--mlock"}, CURRENT_FLAGS)
@@ -224,6 +250,58 @@ class ProbeTests(unittest.TestCase):
         self.assertIsNone(probe_supported_flags(missing, [], dict(os.environ)))
 
 
+@unittest.skipIf(os.name == "nt", "shell script fake binary")
+class StartFailureTests(unittest.TestCase):
+    def setUp(self):
+        runner_module._SUPPORTED_FLAGS_CACHE.clear()
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        runner_module._SUPPORTED_FLAGS_CACHE.clear()
+
+    def test_exit_during_start_is_reported_with_log_tail(self):
+        path = os.path.join(self.tmp.name, "llama-server")
+        with open(path, "w") as f:
+            f.write(
+                "#!/bin/sh\n"
+                "echo 'llama_model_load: error loading model: out of memory'\n"
+                "exit 1\n"
+            )
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        runner = RunnerProcess(
+            "runner1",
+            {"type": "llama-server", "path": path},
+            "127.0.0.1",
+            18797,
+            session_log_dir=self.tmp.name,
+        )
+        model = {"runner": "runner1", "model": "/m.gguf", "model_alias": "m"}
+        runner.add_model(model)
+
+        async def start():
+            # Simulate the auto-unload watchdog noticing the exit first
+            async def watchdog():
+                while True:
+                    await runner.is_running()
+                    await asyncio.sleep(0.2)
+
+            task = asyncio.create_task(watchdog())
+            try:
+                return await runner.start_with_model("m")
+            finally:
+                task.cancel()
+
+        started = time.monotonic()
+        with self.assertLogs("backend.runner", level="ERROR") as logs:
+            ok = asyncio.run(start())
+        self.assertFalse(ok)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertTrue(any("exited during startup" in line for line in logs.output))
+        self.assertTrue(any("out of memory" in line for line in logs.output))
+        self.assertFalse(runner.is_starting)
+
+
 class ConfigValidationTests(unittest.TestCase):
     def _load(self, **model_overrides):
         config = {
@@ -269,6 +347,11 @@ class ConfigValidationTests(unittest.TestCase):
         with self.assertLogs("backend.config", level="WARNING") as logs:
             self._load(chat_template="mistral-instruct", jinja=True)
         self.assertTrue(any("built-in template" in line for line in logs.output))
+
+    def test_split_mode_row_warns(self):
+        with self.assertLogs("backend.config", level="WARNING") as logs:
+            self._load(split_mode="row")
+        self.assertTrue(any("split buffers" in line for line in logs.output))
 
     def test_tts_keys_on_llama_server_runner_warn(self):
         with self.assertLogs("backend.config", level="WARNING") as logs:

@@ -342,13 +342,13 @@ Once enabled, send your MCP (JSON-RPC) requests to `POST http://localhost:8080/v
 - `n_gpu_layers`: How many layers to offload to GPU: a number (99 for all layers), `"auto"` (let llama-server fit layers to free VRAM; the upstream default) or `"all"`. `"auto"`/`"all"` need a llama.cpp build from late 2025 or newer.
 - `tensor_split`: Array defining how to split model across GPUs (e.g., [1.0, 0.0])
 - `offload_kqv`: Whether to offload key-value cache to GPU (`true`/`false`)
-- `load_mode`: How llama-server loads the model file (passed as `--load-mode`): `"auto"` (upstream default: mmap unless a device doesn't support it), `"none"`, `"mmap"`, `"mlock"` (keep the model in RAM, no swapping), `"mmap+mlock"`, or `"dio"` (DirectIO).
-- `use_mlock`: **Deprecated** — use `load_mode` instead. llama-server removed `--mlock` in September 2026; `use_mlock: true` is converted to `load_mode: "mlock"`. If both are set, `load_mode` wins.
+- `load_mode`: How llama-server loads the model file (passed as `--load-mode`): `"auto"` (upstream default: mmap unless a device doesn't support it), `"none"` (read without mmap), `"mmap"`, `"mmap+mlock"` (mmap and keep the model in RAM, no swapping), `"mlock"` (read **without** mmap and keep it in RAM), or `"dio"` (DirectIO).
+- `use_mlock`: **Deprecated** — use `load_mode` instead. llama-server removed `--mlock` in September 2026; `use_mlock: true` is converted to `load_mode: "mmap+mlock"`, which is what the old `--mlock` did (it locked the default mmapped model). If both are set, `load_mode` wins.
 
 #### Optimization
 
 - `flash_attn`: Flash attention mode - `"on"`, `"off"`, or `"auto"` (case-sensitive). Boolean values (`true`/`false`) are deprecated but still supported for backwards compatibility.
-- `split_mode`: How to split the model across GPUs: `"none"`, `"layer"` (upstream default), `"row"`, or `"tensor"` (tensor parallelism, experimental, recent builds only)
+- `split_mode`: How to split the model across GPUs: `"none"`, `"layer"` (upstream default), `"row"`, or `"tensor"` (tensor parallelism, experimental, recent builds only). **`"row"` was removed from the CUDA backend in July 2026** and is not implemented by ROCm, Vulkan or Metal either; there the model fails to load with `does not support split buffers`. Use `"layer"` or `"tensor"`.
 - `cache-type-k`: Key cache quantization type (e.g., "q8_0")
 - `cache-type-v`: Value cache quantization type (e.g., "q8_0")
 
@@ -372,11 +372,21 @@ Unknown model options are ignored with a warning, so check the log for typos.
 llama-server refuses to start when it gets a flag it doesn't recognise, and llama.cpp regularly renames or removes flags. To handle this, FlexLLama runs `llama-server --help` once per runner binary (runners of type `"llama-server"` only) and:
 
 - Emits `--load-mode` on builds that have it, and falls back to `--mlock` / `--no-mmap` / `--direct-io` on older builds.
-- Rewrites removed flags in `args` / `extra_args` (`--mlock`, `--mmap`, `--no-mmap`, `-dio`, `--direct-io`) to `--load-mode` on current builds, and logs a deprecation warning.
+- Rewrites removed flags in `args` / `extra_args` (`--mlock`, `--mmap`, `--no-mmap`, `-dio`, `--direct-io`) to the equivalent `--load-mode` on current builds (for example `--mlock` becomes `--load-mode mmap+mlock`, and `--no-mmap --mlock` becomes `--load-mode mlock`), and logs a deprecation warning.
 - Only passes `--no-jinja` to builds that support it.
 - Logs a warning that names any flag the binary doesn't recognise, so an incompatible option is easy to spot when a runner fails to start.
 
 If the probe fails, FlexLLama assumes a current llama-server build.
+
+When a runner exits while starting, FlexLLama logs its exit code and the last lines of its runner log, which is where llama-server explains the failure (unknown flag, out of memory, ...).
+
+### Memory defaults in newer llama.cpp builds
+
+If a model that used to load now runs out of GPU memory, check these upstream default changes:
+
+- **Parallel slots:** llama-server now runs 4 parallel slots by default (sharing one KV cache). For models with sliding-window attention (Gemma, gpt-oss, ...) this makes the sliding-window part of the KV cache roughly 4× larger. Add `"args": "--parallel 1"` to get the old single-slot behavior.
+- **Automatic fitting (`--fit`):** on by default; it reduces unset `n_ctx` / `n_gpu_layers` to fit free VRAM. Explicit `n_ctx` / `n_gpu_layers` values, or `--fit off`, disable that.
+- **`n_gpu_layers: -1`** now means `"auto"`: with `--fit` on it is fitted to free VRAM (possibly fewer layers), with `--fit off` it offloads all layers. Use `"all"` or a number such as `99` to always request full offload.
 
 ## Audio Endpoints
 

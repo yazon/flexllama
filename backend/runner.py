@@ -27,17 +27,62 @@ except ImportError:  # executed as a script: python backend/runner.py
 # Get logger for this module
 logger = logging.getLogger(__name__)
 
-# Legacy loading flags that may still appear in user-supplied args/extra_args,
-# mapped to the equivalent --load-mode value (None means "use the default").
-_LEGACY_LOAD_FLAGS = {
-    "--mlock": "mlock",
-    "--mmap": "mmap",
-    "--no-mmap": "none",
-    "-dio": "dio",
-    "--direct-io": "dio",
-    "-ndio": None,
-    "--no-direct-io": None,
+# Legacy loading flags that may still appear in user-supplied args/extra_args.
+# llama-server removed them in favor of --load-mode (2026-09-09).
+_LEGACY_LOAD_FLAGS = (
+    "--mlock",
+    "--mmap",
+    "--no-mmap",
+    "-dio",
+    "--direct-io",
+    "-ndio",
+    "--no-direct-io",
+)
+
+# load_mode -> flags understood by llama-server builds without --load-mode.
+# Those builds mmap by default, so "mlock" (no mmap) needs an explicit --no-mmap.
+_LEGACY_LOAD_MODE_ARGS = {
+    "auto": [],
+    "mmap": [],
+    "none": ["--no-mmap"],
+    "mlock": ["--no-mmap", "--mlock"],
+    "mmap+mlock": ["--mlock"],
+    "dio": ["--direct-io"],
 }
+
+
+def legacy_flags_to_load_mode(flags: list[str]) -> str | None:
+    """Return the --load-mode equivalent of legacy --mlock/--mmap/--direct-io flags.
+
+    Mirrors how older llama-server combined them: mmap was on by default and
+    --mlock locked the (mmapped) model in RAM, so a bare --mlock is
+    "mmap+mlock". Returns None when the flags amount to the default mode.
+    """
+    mmap = None
+    mlock = False
+    dio = False
+    for flag in flags:
+        if flag == "--mlock":
+            mlock = True
+        elif flag == "--mmap":
+            mmap = True
+        elif flag == "--no-mmap":
+            mmap = False
+        elif flag in ("-dio", "--direct-io"):
+            dio = True
+        elif flag in ("-ndio", "--no-direct-io"):
+            dio = False
+
+    if dio:
+        return "dio"
+    if mlock:
+        return "mlock" if mmap is False else "mmap+mlock"
+    if mmap is False:
+        return "none"
+    if mmap is True:
+        return "mmap"
+    return None
+
 
 # Matches option names in `llama-server --help` output and in a command line.
 _FLAG_RE = re.compile(r"(?<![\w-])(--?[A-Za-z][A-Za-z0-9-]*)")
@@ -391,6 +436,9 @@ class RunnerProcess:
                     popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
                 self.process = subprocess.Popen(cmd, **popen_kwargs)
+                # Local handle: the auto-unload watchdog may reset self.process
+                # when it notices the exit before this loop does.
+                proc = self.process
             except Exception as e:
                 logger.error(
                     f"Failed to create subprocess for runner {self.runner_name}: {e}"
@@ -406,15 +454,8 @@ class RunnerProcess:
             await asyncio.sleep(2)  # Initial wait
 
             # Check if process is still running
-            if self.process is not None and self.process.poll() is not None:
-                logger.error(
-                    f"Runner {self.runner_name} exited with code: {self.process.returncode}"
-                )
-                self.process = None
-                self.output_file.close()
-                self.output_file = None
-                self.current_model = None
-                self.is_starting = False
+            if proc.poll() is not None:
+                self._handle_exit_during_start(proc, log_file)
                 return False
 
             # Wait for server to be ready
@@ -432,15 +473,8 @@ class RunnerProcess:
                     return True
 
                 # Check if process is still running
-                if self.process is not None and self.process.poll() is not None:
-                    logger.error(
-                        f"Runner {self.runner_name} exited with code: {self.process.returncode}"
-                    )
-                    self.process = None
-                    self.output_file.close()
-                    self.output_file = None
-                    self.current_model = None
-                    self.is_starting = False
+                if proc.poll() is not None:
+                    self._handle_exit_during_start(proc, log_file)
                     return False
 
                 await asyncio.sleep(retry_interval)
@@ -457,6 +491,47 @@ class RunnerProcess:
                 await self.stop()
             self.is_starting = False
             return False
+
+    def _handle_exit_during_start(self, proc, log_file: str) -> None:
+        """Report a runner that exited while starting and reset its state.
+
+        Logs the exit code and the tail of the runner's log (where llama-server
+        prints why it failed, e.g. an unknown flag or out of memory) so the
+        cause is visible in FlexLLama's own log.
+        """
+        logger.error(
+            f"Runner {self.runner_name} exited during startup with code: {proc.returncode}"
+        )
+        tail = self._read_start_log_tail(log_file)
+        if tail:
+            logger.error(
+                f"Last lines of {log_file}:\n"
+                + "\n".join(f"    {line}" for line in tail)
+            )
+        if self.process is proc:
+            self.process = None
+        if self.output_file is not None:
+            try:
+                self.output_file.close()
+            except Exception:
+                pass
+            self.output_file = None
+        self.current_model = None
+        self.is_starting = False
+
+    @staticmethod
+    def _read_start_log_tail(log_file: str, max_lines: int = 15) -> list[str]:
+        """Return the last lines the runner logged since its latest start marker."""
+        try:
+            with open(log_file, "r", errors="replace") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            return []
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].startswith("=== Starting with model"):
+                lines = lines[i + 1 :]
+                break
+        return [line for line in lines if line.strip()][-max_lines:]
 
     async def stop(self):
         """Stop the runner process.
@@ -654,20 +729,15 @@ class RunnerProcess:
         """
         mode = model_config.get("load_mode")
         if mode is None and model_config.get("use_mlock", False):
-            # Same mapping upstream used for its --mlock deprecation shim
-            mode = "mlock"
+            # use_mlock used to emit --mlock on top of llama.cpp's default mmap
+            mode = "mmap+mlock"
         if mode is None:
             return []
 
         if self._supports("--load-mode"):
             return ["--load-mode", mode]
 
-        legacy = {
-            "mlock": ["--mlock"],
-            "mmap+mlock": ["--mlock"],
-            "none": ["--no-mmap"],
-            "dio": ["--direct-io"],
-        }.get(mode, [])
+        legacy = _LEGACY_LOAD_MODE_ARGS.get(mode, [])
         logger.info(
             f"Runner {self.runner_name}: binary has no --load-mode; "
             f"using legacy flags {legacy or '(default)'} for load_mode '{mode}'"
@@ -681,9 +751,9 @@ class RunnerProcess:
 
         llama-server removed these flags in favor of --load-mode, and rejects
         unknown flags at startup. When the binary supports --load-mode, the
-        legacy flags are replaced by a single `--load-mode MODE` (last one
-        wins, matching upstream semantics), or dropped when load_mode_set says
-        the config already produced a --load-mode. Older binaries get args
+        legacy flags are replaced by a single equivalent `--load-mode MODE`
+        (see legacy_flags_to_load_mode), or dropped when load_mode_set says the
+        config already produced a --load-mode. Older binaries get args
         unchanged.
         """
         if not self._supports("--load-mode"):
@@ -694,7 +764,7 @@ class RunnerProcess:
             return args
 
         kept = [a for a in args if a not in _LEGACY_LOAD_FLAGS]
-        mode = _LEGACY_LOAD_FLAGS[legacy_found[-1]]
+        mode = legacy_flags_to_load_mode(legacy_found)
         if load_mode_set:
             replacement = "nothing (load_mode is already set in the config)"
         elif mode is not None:
