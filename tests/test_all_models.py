@@ -25,7 +25,26 @@ SYSTEM_PROMPT = "You are a helpful assistant. Please respond concisely."
 USER_PROMPT = "Hello! What is 2+2? Just give me the number."
 TEMPERATURE = 0.1
 MAX_TOKENS = 300
-TIMEOUT = 120
+# FlexLLama itself retries while a model loads, which can take minutes for
+# large models; a shorter client timeout makes the test re-send requests while
+# the server is still working on the first one.
+TIMEOUT = 600
+EMBEDDING_INPUT = "The quick brown fox jumps over the lazy dog."
+RERANK_QUERY = "What is 2+2?"
+RERANK_DOCUMENTS = ["2+2 equals 4.", "Paris is the capital of France."]
+
+
+def model_kind(model_config: Dict) -> str:
+    """Return which endpoint can test a model: "rerank", "embedding" or "chat".
+
+    Embedding and reranking models (e.g. BERT-based ones) cannot generate
+    text, so a chat request fails for them even though they loaded fine.
+    """
+    if model_config.get("reranking", False):
+        return "rerank"
+    if model_config.get("embedding", False):
+        return "embedding"
+    return "chat"
 
 
 def setup_test_logging(debug: bool = False):
@@ -105,12 +124,14 @@ class ModelTestResult:
         self.sample_response = None
         self.sample_streaming_response = None
         self.model_config = None
+        self.kind = "chat"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "model_alias": self.model_alias,
             "runner_name": self.runner_name,
+            "kind": self.kind,
             "loaded_successfully": self.loaded_successfully,
             "health_check_passed": self.health_check_passed,
             "appears_in_models_list": self.appears_in_models_list,
@@ -155,6 +176,7 @@ async def test_individual_model(
     runner_name = model_config.get("runner", "unknown")
     result = ModelTestResult(model_alias, runner_name)
     result.model_config = model_config
+    result.kind = model_kind(model_config)
 
     logger.info(f"Testing model: {model_alias} (runner: {runner_name})")
 
@@ -166,6 +188,14 @@ async def test_individual_model(
         # Test 2: Check if model appears in models list
         if await test_models_endpoint(base_url, result):
             result.appears_in_models_list = True
+
+        # Embedding/reranking models: their own endpoint is the main test
+        if result.kind != "chat":
+            if await test_embedding_or_rerank(
+                base_url, result, max_retries, retry_delay
+            ):
+                result.loaded_successfully = True
+            return result
 
         # Test 3: Chat completion - the main test
         if await test_chat_completion(base_url, result, max_retries, retry_delay):
@@ -247,58 +277,42 @@ async def test_models_endpoint(base_url: str, result: ModelTestResult) -> bool:
         return False
 
 
-async def test_chat_completion(
-    base_url: str, result: ModelTestResult, max_retries: int = 5, base_delay: int = 2
-) -> bool:
-    """Test chat completion with the model."""
+async def _post_with_retry(
+    base_url: str,
+    result: ModelTestResult,
+    endpoint: str,
+    payload: Dict,
+    label: str,
+    max_retries: int = 5,
+    base_delay: int = 2,
+) -> Optional[Dict]:
+    """POST payload to endpoint, retrying while the model loads.
+
+    Returns the JSON body of a 200 response, or None after recording the
+    failure in result.error_messages. Sets result.response_time_ms.
+    """
     for attempt in range(max_retries + 1):
         try:
-            test_data = {
-                "model": result.model_alias,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": USER_PROMPT},
-                ],
-                "temperature": TEMPERATURE,
-                "max_tokens": MAX_TOKENS,
-            }
-
             if attempt > 0:
                 logger.info(
-                    f"Retrying chat completion for model {result.model_alias} (attempt {attempt + 1}/{max_retries + 1})"
+                    f"Retrying {label} for model {result.model_alias} (attempt {attempt + 1}/{max_retries + 1})"
                 )
             else:
-                logger.info(
-                    f"Sending chat completion request for model: {result.model_alias}"
-                )
+                logger.info(f"Sending {label} request for model: {result.model_alias}")
 
             start_time = time.time()
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{base_url}/v1/chat/completions",
-                    json=test_data,
+                    f"{base_url}{endpoint}",
+                    json=payload,
                     timeout=aiohttp.ClientTimeout(total=TIMEOUT),
                 ) as response:
                     end_time = time.time()
                     result.response_time_ms = int((end_time - start_time) * 1000)
 
                     if response.status == 200:
-                        data = await response.json()
-                        if "choices" in data and len(data["choices"]) > 0:
-                            content = (
-                                data["choices"][0].get("message", {}).get("content", "")
-                            )
-                            result.sample_response = content.strip()
-                            logger.info(
-                                f"Model {result.model_alias} responded in {result.response_time_ms}ms: {content[:50]}..."
-                            )
-                            return True
-                        else:
-                            result.error_messages.append(
-                                f"Invalid response format: {data}"
-                            )
-                            return False
+                        return await response.json()
                     elif response.status == 503:
                         # Check if this is a "Loading model" error that we can retry
                         try:
@@ -306,8 +320,9 @@ async def test_chat_completion(
                             error_message = error_data.get("error", {}).get(
                                 "message", ""
                             )
+                            # "Model is still loading"; a failed load is final
                             if (
-                                "loading" in error_message.lower()
+                                "still loading" in error_message.lower()
                                 and attempt < max_retries
                             ):
                                 delay = base_delay * (2**attempt)  # Exponential backoff
@@ -319,39 +334,119 @@ async def test_chat_completion(
                             else:
                                 error_text = await response.text()
                                 result.error_messages.append(
-                                    f"Chat completion failed ({response.status}): {error_text}"
+                                    f"{label.capitalize()} failed ({response.status}): {error_text}"
                                 )
-                                return False
+                                return None
                         except (json.JSONDecodeError, aiohttp.ContentTypeError):
                             # If we can't parse the error, treat as non-retryable
                             error_text = await response.text()
                             result.error_messages.append(
-                                f"Chat completion failed ({response.status}): {error_text}"
+                                f"{label.capitalize()} failed ({response.status}): {error_text}"
                             )
-                            return False
+                            return None
                     else:
                         error_text = await response.text()
                         result.error_messages.append(
-                            f"Chat completion failed ({response.status}): {error_text}"
+                            f"{label.capitalize()} failed ({response.status}): {error_text}"
                         )
-                        return False
+                        return None
         except Exception as e:
+            # repr: a timeout's str() is empty
             if attempt < max_retries:
                 delay = base_delay * (2**attempt)
                 logger.warning(
-                    f"Chat completion error for {result.model_alias}: {e}, retrying in {delay}s..."
+                    f"{label.capitalize()} error for {result.model_alias}: {e!r}, retrying in {delay}s..."
                 )
                 await asyncio.sleep(delay)
                 continue
             else:
-                result.error_messages.append(f"Chat completion error: {e}")
-                return False
+                result.error_messages.append(f"{label.capitalize()} error: {e!r}")
+                return None
 
     # If we get here, all retries failed
     result.error_messages.append(
-        f"Chat completion failed after {max_retries + 1} attempts"
+        f"{label.capitalize()} failed after {max_retries + 1} attempts"
     )
+    return None
+
+
+async def test_chat_completion(
+    base_url: str, result: ModelTestResult, max_retries: int = 5, base_delay: int = 2
+) -> bool:
+    """Test chat completion with the model."""
+    test_data = {
+        "model": result.model_alias,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": USER_PROMPT},
+        ],
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_TOKENS,
+    }
+    data = await _post_with_retry(
+        base_url,
+        result,
+        "/v1/chat/completions",
+        test_data,
+        "chat completion",
+        max_retries,
+        base_delay,
+    )
+    if data is None:
+        return False
+    if "choices" in data and len(data["choices"]) > 0:
+        content = data["choices"][0].get("message", {}).get("content", "")
+        result.sample_response = content.strip()
+        logger.info(
+            f"Model {result.model_alias} responded in {result.response_time_ms}ms: {content[:50]}..."
+        )
+        return True
+    result.error_messages.append(f"Invalid response format: {data}")
     return False
+
+
+async def test_embedding_or_rerank(
+    base_url: str, result: ModelTestResult, max_retries: int = 5, base_delay: int = 2
+) -> bool:
+    """Test an embedding model via /v1/embeddings or a reranker via /v1/rerank."""
+    if result.kind == "rerank":
+        endpoint = "/v1/rerank"
+        payload = {
+            "model": result.model_alias,
+            "query": RERANK_QUERY,
+            "documents": RERANK_DOCUMENTS,
+        }
+    else:
+        endpoint = "/v1/embeddings"
+        payload = {"model": result.model_alias, "input": EMBEDDING_INPUT}
+
+    data = await _post_with_retry(
+        base_url, result, endpoint, payload, result.kind, max_retries, base_delay
+    )
+    if data is None:
+        return False
+
+    if result.kind == "rerank":
+        scores = [
+            (item.get("index"), item.get("relevance_score"))
+            for item in data.get("results", [])
+        ]
+        if len(scores) != len(RERANK_DOCUMENTS):
+            result.error_messages.append(f"Invalid rerank response: {data}")
+            return False
+        result.sample_response = f"relevance scores (index, score): {scores}"
+    else:
+        items = data.get("data", [])
+        embedding = items[0].get("embedding") if items else None
+        if not embedding:
+            result.error_messages.append(f"Invalid embeddings response: {data}")
+            return False
+        result.sample_response = f"embedding with {len(embedding)} dimensions"
+
+    logger.info(
+        f"Model {result.model_alias} answered {endpoint} in {result.response_time_ms}ms: {result.sample_response}"
+    )
+    return True
 
 
 def _extract_content_from_json(json_data: dict) -> Optional[str]:
@@ -651,13 +746,16 @@ def print_summary(all_results: List[ModelTestResult]):
 
         for result in results:
             status = "✅ SUCCESS" if result.loaded_successfully else "❌ FAILED"
-            streaming_status = (
-                " [STREAMING ✅]"
-                if result.streaming_works
-                else " [STREAMING ❌]"
-                if result.loaded_successfully
-                else ""
-            )
+            if result.kind != "chat":
+                streaming_status = f" [{result.kind.upper()}]"
+            else:
+                streaming_status = (
+                    " [STREAMING ✅]"
+                    if result.streaming_works
+                    else " [STREAMING ❌]"
+                    if result.loaded_successfully
+                    else ""
+                )
             response_time = (
                 f" ({result.response_time_ms}ms)" if result.response_time_ms else ""
             )

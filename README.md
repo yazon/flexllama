@@ -21,7 +21,7 @@
 - 📊 **Real-time dashboard** - Monitor model status, live GPU telemetry, and per-model token throughput in a web interface
 - 🤖 **Chat & Completions** - Full chat and text completion support
 - 🔍 **Embeddings & Reranking** - Supports models for embeddings and reranking
-- 🎙️ **Audio endpoints** - Speech-to-text proxied to audio models (Voxtral, Qwen3-Omni, and more); text-to-speech proxied to a TTS-capable runner
+- 🎙️ **Audio endpoints** - Speech-to-text proxied to audio models (Voxtral, Qwen3-Omni, and more); text-to-speech proxied to llama-server TTS models (llama.cpp v1.0.0+) or a custom TTS runner
 - 🛠️ **MCP proxy (experimental)** - Optional unified Model Context Protocol endpoint that routes requests to `mcp`-tagged models
 - ⚡ **Auto-start** - Automatically start default runners on launch
 - 🔄 **Model switching** - Dynamically load/unload models as needed
@@ -295,10 +295,10 @@ For AMD ROCm systems, you may need to add `/dev/kfd` device mapping in `docker-c
 
 **Note**: Vulkan support on Windows with Docker is limited. For best results on Windows, use WSL2 with the Linux instructions or use the CUDA backend instead.
 
-**llama.cpp version:** the Docker images build a pinned llama.cpp release (`LLAMA_CPP_REF`, currently `v0.5.0`) rather than the latest master, because upstream master regularly removes command-line flags. To build a different release, pass it as a build argument:
+**llama.cpp version:** the Docker images build a pinned llama.cpp release (`LLAMA_CPP_REF`, currently `v1.0.0`) rather than the latest master, because upstream master regularly removes command-line flags. To build a different release, pass it as a build argument:
 
 ```bash
-docker build -f Dockerfile.cuda --build-arg LLAMA_CPP_REF=v0.5.0 -t flexllama-gpu:latest .
+docker build -f Dockerfile.cuda --build-arg LLAMA_CPP_REF=v1.0.0 -t flexllama-gpu:latest .
 ```
 
 ## Configuration

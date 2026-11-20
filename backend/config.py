@@ -47,6 +47,7 @@ KNOWN_MODEL_KEYS = {
     "n_batch",
     "u_batch",
     "n_threads",
+    "n_parallel",
     "main_gpu",
     "n_gpu_layers",
     "tensor_split",
@@ -71,8 +72,9 @@ KNOWN_MODEL_KEYS = {
     "args",
 }
 
-# Model options that only a TTS-capable runner understands; upstream
-# llama-server has no such flags and no /v1/audio/speech endpoint.
+# Model options that only a custom TTS runner understands; upstream
+# llama-server has no such flags (its own TTS loads the model with --model,
+# plus --mmproj where the model needs one).
 TTS_MODEL_KEYS = ("talker_model", "code2wav_model", "model_vocoder")
 
 
@@ -177,9 +179,10 @@ class ConfigManager:
                 self.config[runner_name], runner_name, used_ports
             )
 
-        # TTS options need a TTS-capable runner: upstream llama-server has no
-        # --talker-model/--code2wav-model/--model-vocoder flags and no
-        # /v1/audio/speech endpoint, so it would refuse to start.
+        # Upstream llama-server has no --talker-model/--code2wav-model/
+        # --model-vocoder flags and refuses to start with them. Builds b12238+
+        # (llama.cpp v1.0.0) serve /v1/audio/speech for TTS models loaded the
+        # usual way, so these options are only for a custom TTS runner.
         for i, model in enumerate(self.config["models"]):
             tts_keys = [key for key in TTS_MODEL_KEYS if key in model]
             runner_type = self.config[model["runner"]].get("type")
@@ -187,9 +190,11 @@ class ConfigManager:
                 logger.warning(
                     f"Model {i}: {', '.join(tts_keys)} set on runner "
                     f"'{model['runner']}' of type 'llama-server'. Upstream "
-                    "llama-server does not support these options or "
-                    "/v1/audio/speech; use a TTS-capable server as this runner "
-                    "and give it a different 'type'."
+                    "llama-server does not support these options. Current "
+                    "builds serve /v1/audio/speech for TTS models set up with "
+                    "'model' (and 'mmproj' where needed); otherwise use a "
+                    "custom TTS server as this runner and give it a different "
+                    "'type'."
                 )
 
         logger.info("Configuration validation successful")
@@ -520,6 +525,13 @@ class ConfigManager:
         if not isinstance(model["model"], str):
             raise ValueError(f"Model {index}: Model path must be a string")
 
+        # A missing file only fails when the model is first requested, so
+        # point it out now (paths may be valid only inside a container).
+        for field in ("model", "mmproj", "audio_encoder"):
+            path = model.get(field)
+            if isinstance(path, str) and not os.path.exists(path):
+                logger.warning(f"Model {index}: {field} file not found: {path}")
+
         # Validate runner reference
         if not isinstance(model["runner"], str):
             raise ValueError(f"Model {index}: Runner reference must be a string")
@@ -562,6 +574,7 @@ class ConfigManager:
             "n_batch",
             "u_batch",
             "n_threads",
+            "n_parallel",
             "main_gpu",
             "yarn-orig-ctx",
         ]

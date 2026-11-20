@@ -107,6 +107,7 @@ FlexLLama supports automatic model unloading to free up RAM when models are idle
 - `auto_unload_timeout_seconds: 300` - Unloads model after 5 minutes of inactivity
 - Models are considered "active" while processing requests (including streaming)
 - The timeout is measured from the last request completion
+- A model that is still loading is never unloaded; the idle time starts once it has finished loading
 - Auto-unload frees RAM by stopping the runner process entirely
 - Models will be automatically reloaded when the next request arrives
 
@@ -329,7 +330,7 @@ Once enabled, send your MCP (JSON-RPC) requests to `POST http://localhost:8080/v
 - `code2wav_model`: Path to a code2wav (talker code detokenizer) gguf (passed as `--code2wav-model`). For text-to-speech runners.
 - `model_vocoder`: Path to a vocoder gguf (passed as `--model-vocoder`). For text-to-speech runners.
 
-  > **TTS runners:** upstream `llama-server` has no `/v1/audio/speech` endpoint and does not accept these three flags (`--model-vocoder` was removed in August 2026), so a `llama-server` runner would refuse to start. Use them with a TTS-capable server as the runner, and give that runner a `type` other than `"llama-server"` (for example `"tts-server"`). The server must accept llama-server-style arguments (`--model`, `--host`, `--port`, ...), because FlexLLama passes the same core arguments to every runner.
+  > **Custom TTS runners only:** upstream `llama-server` does not accept these three flags (`--model-vocoder` was removed in August 2026), so a `llama-server` runner would refuse to start. Current `llama-server` builds do text-to-speech without them (see [Audio Endpoints](#audio-endpoints)). Use these options only with a custom TTS server as the runner, and give that runner a `type` other than `"llama-server"` (for example `"tts-server"`). The server must accept llama-server-style arguments (`--model`, `--host`, `--port`, ...), because FlexLLama passes the same core arguments to every runner.
 - `mcp`: Set to `true` to tag a model as a target for the unified `/v1/mcp` endpoint. Pure metadata (it is never passed to llama-server); see [MCP Proxy Configuration](#mcp-proxy-configuration).
 
 #### Performance & Memory
@@ -338,6 +339,7 @@ Once enabled, send your MCP (JSON-RPC) requests to `POST http://localhost:8080/v
 - `n_batch`: Batch size for processing (e.g., 256, 512)
 - `u_batch`: Physical batch size for prompt processing (e.g., 64, 128)
 - `n_threads`: Number of CPU threads to use
+- `n_parallel`: Number of parallel request slots (`--parallel`). When unset, current llama-server uses 4 slots sharing one KV cache, so a single request can use the whole `n_ctx`; `1` saves memory for models with sliding-window attention (see [Memory defaults](#memory-defaults-in-newer-llamacpp-builds)). A value above 1 splits `n_ctx` evenly between the slots (each request gets `n_ctx / n_parallel` tokens) unless you also add `"args": "--kv-unified"`
 - `main_gpu`: Which GPU to use (0, 1, 2...)
 - `n_gpu_layers`: How many layers to offload to GPU: a number (99 for all layers), `"auto"` (let llama-server fit layers to free VRAM; the upstream default) or `"all"`. `"auto"`/`"all"` need a llama.cpp build from late 2025 or newer.
 - `tensor_split`: Array defining how to split model across GPUs (e.g., [1.0, 0.0])
@@ -380,13 +382,17 @@ If the probe fails, FlexLLama assumes a current llama-server build.
 
 When a runner exits while starting, FlexLLama logs its exit code and the last lines of its runner log, which is where llama-server explains the failure (unknown flag, out of memory, ...).
 
+If llama-server exits with an error while loading a model, FlexLLama does not retry it for that request: the request fails right away with the reason from the runner log (for example `llama-server failed to load the model (exit code 1): ... cudaMalloc failed: out of memory`). The next request tries again. When the reason is running out of memory, FlexLLama first stops other runners whose model is loaded but idle (they usually share the GPU) and retries once; they reload on their next request.
+
 ### Memory defaults in newer llama.cpp builds
 
 If a model that used to load now runs out of GPU memory, check these upstream default changes:
 
-- **Parallel slots:** llama-server now runs 4 parallel slots by default (sharing one KV cache). For models with sliding-window attention (Gemma, gpt-oss, ...) this makes the sliding-window part of the KV cache roughly 4× larger. Add `"args": "--parallel 1"` to get the old single-slot behavior.
+- **Parallel slots:** llama-server now runs 4 parallel slots by default (sharing one KV cache). For models with sliding-window attention (Gemma, gpt-oss, ...) this makes the sliding-window part of the KV cache roughly 4× larger. Set `"n_parallel": 1` to get the old single-slot behavior.
 - **Automatic fitting (`--fit`):** on by default; it reduces unset `n_ctx` / `n_gpu_layers` to fit free VRAM. Explicit `n_ctx` / `n_gpu_layers` values, or `--fit off`, disable that.
 - **`n_gpu_layers: -1`** now means `"auto"`: with `--fit` on it is fitted to free VRAM (possibly fewer layers), with `--fit off` it offloads all layers. Use `"all"` or a number such as `99` to always request full offload.
+
+At the default log level, current builds no longer write load details such as `offloaded 29/29 layers to GPU` or per-device buffer sizes to the runner log. To check where a model's layers went, add `"args": "-lv 4"` to that model and look in `<runner_name>.log`.
 
 ## Audio Endpoints
 
@@ -411,7 +417,7 @@ To enable them, configure an audio model with `"type": "audio"` and point `audio
 
 Speech-to-text works with upstream `llama-server`: any model whose multimodal projector includes an audio encoder (Voxtral, Ultravox, Qwen2-Audio, Qwen2.5/3-Omni, Qwen3-ASR, Gemma 4 E2B/E4B, ...). llama-server decodes **WAV, MP3 and FLAC** only, and `/v1/audio/transcriptions` supports only `response_format: "json"`.
 
-Text-to-speech (`/v1/audio/speech`) is **not** served by upstream `llama-server`. To use it, run a TTS-capable server as the runner (with a runner `type` other than `"llama-server"`) and set `talker_model` / `code2wav_model` / `model_vocoder` as that server requires (see the model options above).
+Text-to-speech (`/v1/audio/speech`) is served by `llama-server` b12238 or newer (llama.cpp v1.0.0 and later) for the TTS models listed in llama.cpp's [docs/multimodal/tts.md](https://github.com/ggml-org/llama.cpp/blob/master/docs/multimodal/tts.md) (Qwen3-TTS, Pocket TTS, Kokoro, ...). Configure such a model with `model` and, where the model needs one, `mmproj`; set a default language or voice with `"args": "--tts-lang en"` / `"--tts-voice NAME"`. Upstream differences from the OpenAI API: `response_format` is `wav` (the default) or `pcm` only, `voice` must be one of the voices the model lists in `GET /props` (OpenAI names such as `alloy` are rejected), and audio is returned at the model's own sample rate. A model that cannot generate audio answers `501` ("this server does not support audio generation"). For other TTS servers, see the custom TTS runner options above.
 
 ### Usage Examples
 
@@ -450,7 +456,7 @@ curl -sS http://localhost:8080/v1/chat/completions \
 ```bash
 curl -sS http://localhost:8080/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model": "qwen3-omni-tts", "input": "Hello from FlexLLama.", "voice": "default", "response_format": "wav"}' \
+  -d '{"model": "qwen3-tts", "input": "Hello from FlexLLama.", "response_format": "wav"}' \
   --output speech.wav
 ```
 

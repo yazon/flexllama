@@ -24,7 +24,19 @@ if [[ "$(id -u)" == "0" ]]; then
     if [ "$RENDER_GID" != "$VIDEO_GID" ]; then
         usermod -aG "$RENDER_GID" flexllama 2>/dev/null || true
     fi
-    
+
+    # Also join the groups that actually own the DRI device nodes. The render
+    # group's GID differs between distros (e.g. 109, 992), so a wrong or missing
+    # HOST_RENDER_GID (plain `docker run`, stale .env) would otherwise hide the GPU.
+    for node in /dev/dri/renderD* /dev/dri/card*; do
+        [ -e "$node" ] || continue
+        node_gid="$(stat -c '%g' "$node")"
+        if ! getent group "$node_gid" >/dev/null 2>&1; then
+            groupadd -g "$node_gid" "dri_$node_gid" || true
+        fi
+        usermod -aG "$node_gid" flexllama 2>/dev/null || true
+    done
+
     # Ensure /dev/dri is accessible
     if [ -d "/dev/dri" ]; then
         chmod -R g+rw /dev/dri 2>/dev/null || true

@@ -20,7 +20,11 @@ WORKDIR /build
 
 # Pinned llama.cpp release (tag or branch). Upstream master regularly removes
 # CLI flags, so bump this deliberately: --build-arg LLAMA_CPP_REF=vX.Y.Z
-ARG LLAMA_CPP_REF=v0.5.0
+ARG LLAMA_CPP_REF=v1.0.0
+
+# LLAMA_USE_PREBUILT_UI=OFF: llama.cpp downloads its web UI by build number,
+# which a shallow clone reports as b1, so it gets the newest UI, which may not
+# match the pinned release and fails the build. FlexLLama does not use the UI.
 
 RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git && \
     cd llama.cpp && \
@@ -30,7 +34,8 @@ RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/
         -DBUILD_SHARED_LIBS=ON \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/llama.cpp \
-        -DLLAMA_BUILD_SERVER=ON && \
+        -DLLAMA_BUILD_SERVER=ON \
+        -DLLAMA_USE_PREBUILT_UI=OFF && \
     cmake --build build --config Release -j$(nproc) && \
     cmake --install build && \
      # Copy all built libraries to a persistent location before the layer ends
@@ -97,8 +102,8 @@ USER flexllama
 
 # Expose ports
 # 8090: FlexLLama API and dashboard
-# 8095-8100: Default ports for llama-server runners
-EXPOSE 8090 8095 8096 8097 8098 8099 8100
+# Runners (8095+) listen on 127.0.0.1 inside the container; only the API is exposed
+EXPOSE 8090
 
 # Environment variables
 ENV FLEXLLAMA_CONFIG=/app/config.json
