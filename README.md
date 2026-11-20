@@ -31,7 +31,7 @@
 
 ## Quickstart
 
-> **🚀 Want to get started in 5 minutes?** Check out our [**QUICKSTART.md**](QUICKSTART.md) for a simple Docker setup with the Qwen3-4B model!
+> **🚀 Want to get started in 5 minutes?** Check out our [**QUICKSTART.md**](QUICKSTART.md) for a simple Docker setup with the Qwen3.5-4B model!
 
 ### 📦 Local Installation
 
