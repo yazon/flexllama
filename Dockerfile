@@ -18,7 +18,15 @@ RUN apt-get update && apt-get install -y \
 # Clone and build llama.cpp
 WORKDIR /build
 
-RUN git clone https://github.com/ggerganov/llama.cpp.git && \
+# Pinned llama.cpp release (tag or branch). Upstream master regularly removes
+# CLI flags, so bump this deliberately: --build-arg LLAMA_CPP_REF=vX.Y.Z
+ARG LLAMA_CPP_REF=v1.0.0
+
+# LLAMA_USE_PREBUILT_UI=OFF: llama.cpp downloads its web UI by build number,
+# which a shallow clone reports as b1, so it gets the newest UI, which may not
+# match the pinned release and fails the build. FlexLLama does not use the UI.
+
+RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git && \
     cd llama.cpp && \
     cmake -B build \
         -DGGML_BLAS=ON \
@@ -26,14 +34,15 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git && \
         -DBUILD_SHARED_LIBS=ON \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/llama.cpp \
-        -DLLAMA_BUILD_SERVER=ON && \
+        -DLLAMA_BUILD_SERVER=ON \
+        -DLLAMA_USE_PREBUILT_UI=OFF && \
     cmake --build build --config Release -j$(nproc) && \
     cmake --install build && \
      # Copy all built libraries to a persistent location before the layer ends
      mkdir -p /opt/llama.cpp/lib && \
      find build -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; && \
      # Specifically ensure libmtmd.so is copied
-     find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true && \
+     { find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true; } && \
      # List what we have for debugging
      echo "=== Libraries in /opt/llama.cpp/lib ===" && \
      ls -la /opt/llama.cpp/lib/
@@ -93,8 +102,8 @@ USER flexllama
 
 # Expose ports
 # 8090: FlexLLama API and dashboard
-# 8095-8100: Default ports for llama-server runners
-EXPOSE 8090 8095 8096 8097 8098 8099 8100
+# Runners (8095+) listen on 127.0.0.1 inside the container; only the API is exposed
+EXPOSE 8090
 
 # Environment variables
 ENV FLEXLLAMA_CONFIG=/app/config.json

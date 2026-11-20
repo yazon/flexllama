@@ -5,14 +5,17 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Docker limits locked memory to 8 MB by default, so models with
+    # "load_mode": "mmap+mlock" would log "failed to mlock" and not be locked.
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     profiles: ["cpu"]
     ports:
-      - "8090:8090"  # FlexLLama API and dashboard
-      - "8095:8095"  # Runner 1
-      - "8096:8096"  # Runner 2
-      - "8097:8097"  # Runner 3 (optional)
-      - "8098:8098"  # Runner 4 (optional)
-      - "8099:8099"  # Runner 5 (optional)
+      # FlexLLama API and dashboard. Runners (8095+) listen on 127.0.0.1 inside
+      # the container and are reached through the API, so they are not published.
+      - "8090:8090"
     volumes:
       - ./docker/config.qwen3.unified.json:/app/config.json:ro  # Configuration file
       - ./models:/app/models:ro                   # Model files directory
@@ -35,14 +38,17 @@ services:
       context: .
       dockerfile: Dockerfile.cuda
     restart: unless-stopped
+    # Docker limits locked memory to 8 MB by default, so models with
+    # "load_mode": "mmap+mlock" would log "failed to mlock" and not be locked.
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     profiles: ["gpu"]
     ports:
-      - "8090:8090"  # FlexLLama API and dashboard
-      - "8095:8095"  # Runner 1
-      - "8096:8096"  # Runner 2
-      - "8097:8097"  # Runner 3 (optional)
-      - "8098:8098"  # Runner 4 (optional)
-      - "8099:8099"  # Runner 5 (optional)
+      # FlexLLama API and dashboard. Runners (8095+) listen on 127.0.0.1 inside
+      # the container and are reached through the API, so they are not published.
+      - "8090:8090"
     volumes:
       - ./docker/config.qwen3.unified.json:/app/config.json:ro
       - ./models:/app/models:ro
@@ -72,14 +78,17 @@ services:
       context: .
       dockerfile: Dockerfile.vulkan
     restart: unless-stopped
+    # Docker limits locked memory to 8 MB by default, so models with
+    # "load_mode": "mmap+mlock" would log "failed to mlock" and not be locked.
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     profiles: ["vulkan"]
     ports:
-      - "8090:8090"  # FlexLLama API and dashboard
-      - "8095:8095"  # Runner 1
-      - "8096:8096"  # Runner 2
-      - "8097:8097"  # Runner 3 (optional)
-      - "8098:8098"  # Runner 4 (optional)
-      - "8099:8099"  # Runner 5 (optional)
+      # FlexLLama API and dashboard. Runners (8095+) listen on 127.0.0.1 inside
+      # the container and are reached through the API, so they are not published.
+      - "8090:8090"
     volumes:
       - ./docker/config.qwen3.unified.json:/app/config.json:ro
       - ./models:/app/models:ro
