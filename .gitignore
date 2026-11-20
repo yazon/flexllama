@@ -195,3 +195,5 @@ cython_debug/
 
 # FlexLLama related
 logs/
+# Downloaded models (QUICKSTART.md, docker-compose.yml mount ./models)
+models/

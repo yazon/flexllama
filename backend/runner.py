@@ -7,6 +7,7 @@ It supports multiple concurrent runners for different models.
 """
 
 import os
+import re
 import subprocess
 import time
 import logging
@@ -18,8 +19,163 @@ import json
 import psutil
 import shlex
 
+try:
+    from .config import is_builtin_chat_template_name
+except ImportError:  # executed as a script: python backend/runner.py
+    from config import is_builtin_chat_template_name
+
 # Get logger for this module
 logger = logging.getLogger(__name__)
+
+# Legacy loading flags that may still appear in user-supplied args/extra_args.
+# llama-server removed them in favor of --load-mode (2026-09-09).
+_LEGACY_LOAD_FLAGS = (
+    "--mlock",
+    "--mmap",
+    "--no-mmap",
+    "-dio",
+    "--direct-io",
+    "-ndio",
+    "--no-direct-io",
+)
+
+# load_mode -> flags understood by llama-server builds without --load-mode.
+# Those builds mmap by default, so "mlock" (no mmap) needs an explicit --no-mmap.
+_LEGACY_LOAD_MODE_ARGS = {
+    "auto": [],
+    "mmap": [],
+    "none": ["--no-mmap"],
+    "mlock": ["--no-mmap", "--mlock"],
+    "mmap+mlock": ["--mlock"],
+    "dio": ["--direct-io"],
+}
+
+
+def legacy_flags_to_load_mode(flags: list[str]) -> str | None:
+    """Return the --load-mode equivalent of legacy --mlock/--mmap/--direct-io flags.
+
+    Mirrors how older llama-server combined them: mmap was on by default and
+    --mlock locked the (mmapped) model in RAM, so a bare --mlock is
+    "mmap+mlock". Returns None when the flags amount to the default mode.
+    """
+    mmap = None
+    mlock = False
+    dio = False
+    for flag in flags:
+        if flag == "--mlock":
+            mlock = True
+        elif flag == "--mmap":
+            mmap = True
+        elif flag == "--no-mmap":
+            mmap = False
+        elif flag in ("-dio", "--direct-io"):
+            dio = True
+        elif flag in ("-ndio", "--no-direct-io"):
+            dio = False
+
+    if dio:
+        return "dio"
+    if mlock:
+        return "mlock" if mmap is False else "mmap+mlock"
+    if mmap is False:
+        return "none"
+    if mmap is True:
+        return "mmap"
+    return None
+
+
+# Matches option names in `llama-server --help` output and in a command line.
+_FLAG_RE = re.compile(r"(?<![\w-])(--?[A-Za-z][A-Za-z0-9-]*)")
+
+# Supported-flag sets per (executable, initial args), probed once per process.
+_SUPPORTED_FLAGS_CACHE: dict[tuple, frozenset | None] = {}
+
+
+def probe_supported_flags(
+    executable: str, initial_args: list[str], env: dict[str, str], timeout: float = 30
+) -> frozenset | None:
+    """Return the set of flags a llama-server binary accepts, or None if unknown.
+
+    Runs `<executable> [initial_args] --help` once and caches the result. Any
+    failure (missing binary, timeout, output that does not look like
+    llama-server help) yields None so callers can fall back to defaults.
+    """
+    key = (executable, tuple(initial_args))
+    if key in _SUPPORTED_FLAGS_CACHE:
+        return _SUPPORTED_FLAGS_CACHE[key]
+
+    flags = None
+    try:
+        result = subprocess.run(
+            [executable, *initial_args, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            check=False,
+        )
+        found = set(_FLAG_RE.findall(f"{result.stdout}\n{result.stderr}"))
+        if "--model" in found and "--port" in found:
+            flags = frozenset(found)
+        else:
+            logger.warning(
+                f"'{executable} --help' did not look like llama-server help; "
+                "skipping flag compatibility checks"
+            )
+    except Exception as e:
+        logger.warning(
+            f"Could not probe supported flags of '{executable}': {e}; "
+            "assuming a current llama-server build"
+        )
+
+    _SUPPORTED_FLAGS_CACHE[key] = flags
+    return flags
+
+
+# Timestamp and level prefix of current llama-server log lines, e.g.
+# "0.34.837.105 E ". Older builds log without it.
+_LOG_PREFIX_RE = re.compile(r"^\d+(?:\.\d+)+ ([A-Z]) +")
+
+# Words that mark a line explaining why llama-server failed to start.
+_ERROR_WORDS_RE = re.compile(r"error|failed|out of memory", re.IGNORECASE)
+
+# Log text of a failed memory allocation (CUDA, Vulkan, Metal, host RAM).
+# A lost Vulkan device counts too: it is how the Vulkan backend on NVIDIA
+# failed while another model held most of the GPU memory.
+_OUT_OF_MEMORY_RE = re.compile(
+    r"out of memory|outofdevicememory|outofhostmemory|failed to allocate"
+    r"|unable to allocate|memory allocation of size \d+ failed|errordevicelost",
+    re.IGNORECASE,
+)
+
+
+def summarize_load_error(log_lines: list[str], returncode: int | None) -> str:
+    """Describe why llama-server exited while loading, from its log output.
+
+    Picks the first error-level line (current builds tag lines with " E "),
+    or else the first line mentioning an error or failure, so the message
+    names the cause (out of memory, missing file, rejected flag) rather than
+    the generic "exiting due to model loading error" that follows it.
+    """
+    reason = None
+    for line in log_lines:
+        match = _LOG_PREFIX_RE.match(line)
+        if match and match.group(1) == "E":
+            reason = line[match.end() :]
+            break
+    if reason is None:
+        for line in log_lines:
+            if _ERROR_WORDS_RE.search(line):
+                reason = _LOG_PREFIX_RE.sub("", line)
+                break
+    # Avoid the word "loading": clients retry 503s that say the model is loading
+    summary = f"llama-server failed to load the model (exit code {returncode})"
+    return f"{summary}: {reason.strip()}" if reason else summary
+
+
+def is_out_of_memory_error(message: str | None) -> bool:
+    """Return True if a load error looks like the GPU ran out of memory."""
+    return bool(message) and bool(_OUT_OF_MEMORY_RE.search(message))
 
 
 # Health Status Constants
@@ -71,6 +227,22 @@ class RunnerProcess:
         self.current_model = None  # Track which model is currently loaded
         self.is_starting = False
         self.start_time = None
+        self.log_file: str | None = None
+
+        # llama-server opens its port before loading the model. model_loaded
+        # becomes True once /health reports ready; until then the runner is
+        # loading and must not be auto-unloaded or evicted.
+        self.model_loaded = False
+
+        # Why the last start of load_error_alias failed: llama-server exited
+        # with an error before the model finished loading. Cleared on start.
+        self.load_error: str | None = None
+        self.load_error_alias: str | None = None
+        self.load_error_ts: float | None = None
+
+        # Flags accepted by this runner's binary (None = unknown, assume current
+        # llama-server). Populated before each start by _probe_flags().
+        self.supported_flags: frozenset | None = None
 
         # Auto-unload state tracking
         self.auto_unload_timeout_seconds = runner_config.get(
@@ -255,8 +427,15 @@ class RunnerProcess:
 
         self.is_starting = True
         self.start_time = time.time()
+        self.model_loaded = False
+        self.load_error = None
+        self.load_error_alias = None
+        self.load_error_ts = None
 
         try:
+            # Learn which flags the binary accepts (cached; off the event loop)
+            await self._probe_flags(model_config)
+
             # Build command and parse environment variables
             cmd, env_from_path = self._build_command_and_env(model_config)
 
@@ -285,6 +464,7 @@ class RunnerProcess:
 
             # Create log file in session directory
             log_file = os.path.join(log_dir, f"{self.runner_name}.log")
+            self.log_file = log_file
 
             model_alias = model_config.get(
                 "model_alias", os.path.basename(model_config["model"])
@@ -319,6 +499,9 @@ class RunnerProcess:
                     popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
                 self.process = subprocess.Popen(cmd, **popen_kwargs)
+                # Local handle: the auto-unload watchdog may reset self.process
+                # when it notices the exit before this loop does.
+                proc = self.process
             except Exception as e:
                 logger.error(
                     f"Failed to create subprocess for runner {self.runner_name}: {e}"
@@ -334,15 +517,8 @@ class RunnerProcess:
             await asyncio.sleep(2)  # Initial wait
 
             # Check if process is still running
-            if self.process is not None and self.process.poll() is not None:
-                logger.error(
-                    f"Runner {self.runner_name} exited with code: {self.process.returncode}"
-                )
-                self.process = None
-                self.output_file.close()
-                self.output_file = None
-                self.current_model = None
-                self.is_starting = False
+            if proc.poll() is not None:
+                self._handle_exit_during_start(proc, log_file, model_alias)
                 return False
 
             # Wait for server to be ready
@@ -360,15 +536,8 @@ class RunnerProcess:
                     return True
 
                 # Check if process is still running
-                if self.process is not None and self.process.poll() is not None:
-                    logger.error(
-                        f"Runner {self.runner_name} exited with code: {self.process.returncode}"
-                    )
-                    self.process = None
-                    self.output_file.close()
-                    self.output_file = None
-                    self.current_model = None
-                    self.is_starting = False
+                if proc.poll() is not None:
+                    self._handle_exit_during_start(proc, log_file, model_alias)
                     return False
 
                 await asyncio.sleep(retry_interval)
@@ -385,6 +554,74 @@ class RunnerProcess:
                 await self.stop()
             self.is_starting = False
             return False
+
+    def _handle_exit_during_start(
+        self, proc: subprocess.Popen, log_file: str, model_alias: str
+    ) -> None:
+        """Report a runner that exited while starting and reset its state.
+
+        Logs the exit code and the tail of the runner's log (where llama-server
+        prints why it failed, e.g. an unknown flag or out of memory) so the
+        cause is visible in FlexLLama's own log, and records the failure in
+        load_error so callers can stop retrying.
+        """
+        logger.error(
+            f"Runner {self.runner_name} exited during startup with code: {proc.returncode}"
+        )
+        lines = self._read_start_log(log_file)
+        tail = lines[-15:]
+        if tail:
+            logger.error(
+                f"Last lines of {log_file}:\n"
+                + "\n".join(f"    {line}" for line in tail)
+            )
+        self._record_exit(proc.returncode, model_alias, lines)
+        if self.process is proc:
+            self.process = None
+        if self.output_file is not None:
+            try:
+                self.output_file.close()
+            except Exception:
+                pass
+            self.output_file = None
+        self.current_model = None
+        self.is_starting = False
+
+    def _record_exit(
+        self,
+        returncode: int | None,
+        model_alias: str,
+        log_lines: list[str] | None = None,
+    ) -> None:
+        """Remember why the process exited if it failed before the model loaded.
+
+        Only positive exit codes count: llama-server exits with 0 when stopped
+        by a signal, and negative codes mean it was killed (both by FlexLLama).
+        log_lines defaults to the runner's log since its latest start.
+        """
+        if self.model_loaded or returncode is None or returncode <= 0:
+            return
+        if log_lines is None:
+            log_lines = self._read_start_log(self.log_file)
+        self.load_error = summarize_load_error(log_lines, returncode)
+        self.load_error_alias = model_alias
+        self.load_error_ts = time.time()
+
+    @staticmethod
+    def _read_start_log(log_file: str | None) -> list[str]:
+        """Return the non-empty lines the runner logged since its latest start marker."""
+        if not log_file:
+            return []
+        try:
+            with open(log_file, "r", errors="replace") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            return []
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].startswith("=== Starting with model"):
+                lines = lines[i + 1 :]
+                break
+        return [line for line in lines if line.strip()]
 
     async def stop(self):
         """Stop the runner process.
@@ -436,6 +673,7 @@ class RunnerProcess:
 
             self.process = None
             self.current_model = None  # Reset current model
+            self.model_loaded = False
 
             # Reset auto-unload state
             self.last_activity_ts = None
@@ -457,6 +695,7 @@ class RunnerProcess:
                 self.output_file = None
             self.process = None
             self.current_model = None
+            self.model_loaded = False
             # Reset auto-unload state
             self.last_activity_ts = None
             self.active_requests = 0
@@ -483,8 +722,13 @@ class RunnerProcess:
             logger.warning(
                 f"Runner {self.runner_name} has exited with code: {self.process.returncode} (was running model: {current_alias})"
             )
+            # An exit before the model loaded is a load failure (e.g. out of
+            # memory); exits during start() are recorded by the start loop.
+            if self.current_model is not None:
+                self._record_exit(self.process.returncode, current_alias)
             self.process = None
             self.current_model = None  # Reset current model
+            self.model_loaded = False
 
             # Close log file
             if self.output_file is not None:
@@ -494,6 +738,37 @@ class RunnerProcess:
             return False
 
         return True
+
+    async def health_status(self) -> int | None:
+        """Return the HTTP status of the server's /health, or None if unreachable."""
+        url = f"http://{self.host}:{self.port}/health"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    return response.status
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return None
+
+    async def refresh_model_loaded(self) -> bool:
+        """Ask the server whether the model has finished loading; return model_loaded.
+
+        llama-server answers /health with 503 while loading. Any other answer
+        counts as loaded, so servers without a /health endpoint (404) are not
+        treated as loading forever.
+        """
+        if not self.model_loaded and await self.is_running():
+            status = await self.health_status()
+            if status is not None and status != 503:
+                self.mark_model_loaded()
+        return self.model_loaded
+
+    def mark_model_loaded(self) -> None:
+        """Record that the model finished loading; idle time starts counting now."""
+        if not self.model_loaded and self.process is not None:
+            self.model_loaded = True
+            self.last_activity_ts = time.time()
 
     def _parse_runner_path_with_env(
         self, raw_path: str
@@ -546,6 +821,110 @@ class RunnerProcess:
         index += 1
         initial_args = tokens[index:] if index < len(tokens) else []
         return executable, initial_args, env_from_path
+
+    async def _probe_flags(self, model_config: dict) -> None:
+        """Populate self.supported_flags for llama-server runners.
+
+        Only runners of type "llama-server" are probed; other runner types
+        (e.g. a custom TTS server) keep supported_flags = None, which disables
+        compatibility translation and unknown-flag warnings.
+        """
+        if self.runner_config.get("type") != "llama-server":
+            self.supported_flags = None
+            return
+
+        executable, initial_args, env_from_path = self._parse_runner_path_with_env(
+            self.runner_config["path"]
+        )
+        env = self._compose_environment(model_config, env_from_path)
+        loop = asyncio.get_event_loop()
+        self.supported_flags = await loop.run_in_executor(
+            None, probe_supported_flags, executable, initial_args, env
+        )
+
+    def _supports(self, flag: str, default: bool = True) -> bool:
+        """Whether the runner binary accepts `flag` (`default` when unknown)."""
+        if self.supported_flags is None:
+            return default
+        return flag in self.supported_flags
+
+    def _load_mode_args(self, model_config: dict) -> list[str]:
+        """Translate load_mode / deprecated use_mlock into llama-server args.
+
+        Emits `--load-mode MODE` for current builds and falls back to the
+        legacy --mlock/--no-mmap/--direct-io flags for builds that predate
+        --load-mode.
+        """
+        mode = model_config.get("load_mode")
+        if mode is None and model_config.get("use_mlock", False):
+            # use_mlock used to emit --mlock on top of llama.cpp's default mmap
+            mode = "mmap+mlock"
+        if mode is None:
+            return []
+
+        if self._supports("--load-mode"):
+            return ["--load-mode", mode]
+
+        legacy = _LEGACY_LOAD_MODE_ARGS.get(mode, [])
+        logger.info(
+            f"Runner {self.runner_name}: binary has no --load-mode; "
+            f"using legacy flags {legacy or '(default)'} for load_mode '{mode}'"
+        )
+        return legacy
+
+    def _translate_legacy_load_flags(
+        self, args: list[str], load_mode_set: bool = False
+    ) -> list[str]:
+        """Rewrite removed --mlock/--mmap/--direct-io flags in user args.
+
+        llama-server removed these flags in favor of --load-mode, and rejects
+        unknown flags at startup. When the binary supports --load-mode, the
+        legacy flags are replaced by a single equivalent `--load-mode MODE`
+        (see legacy_flags_to_load_mode), or dropped when load_mode_set says the
+        config already produced a --load-mode. Older binaries get args
+        unchanged.
+        """
+        if not self._supports("--load-mode"):
+            return args
+
+        legacy_found = [a for a in args if a in _LEGACY_LOAD_FLAGS]
+        if not legacy_found:
+            return args
+
+        kept = [a for a in args if a not in _LEGACY_LOAD_FLAGS]
+        mode = legacy_flags_to_load_mode(legacy_found)
+        if load_mode_set:
+            replacement = "nothing (load_mode is already set in the config)"
+        elif mode is not None:
+            kept.extend(["--load-mode", mode])
+            replacement = f"--load-mode {mode}"
+        else:
+            replacement = "the default load mode"
+        logger.warning(
+            f"Runner {self.runner_name}: deprecated llama-server flag(s) "
+            f"{', '.join(legacy_found)} in args were replaced by {replacement}; "
+            "please use the load_mode model option instead"
+        )
+        return kept
+
+    def _warn_unsupported_flags(self, cmd: list[str]) -> None:
+        """Log flags in cmd that the probed binary does not recognise."""
+        if self.supported_flags is None:
+            return
+        unknown = []
+        for token in cmd[1:]:
+            # llama.cpp accepts --flag=value and converts "_" to "-" in names
+            name = token.split("=", 1)[0].replace("_", "-")
+            if not _FLAG_RE.fullmatch(name) or name in self.supported_flags:
+                continue
+            if name not in unknown:
+                unknown.append(name)
+        if unknown:
+            logger.warning(
+                f"Runner {self.runner_name}: '{cmd[0]}' does not recognise "
+                f"{', '.join(unknown)}; llama-server will most likely refuse to start. "
+                "Check your model/runner configuration against your llama.cpp version."
+            )
 
     def _compose_environment(
         self, model_config: dict, env_from_path: dict[str, str]
@@ -684,6 +1063,24 @@ class RunnerProcess:
                 f"Command building: After n_threads, {len(cmd)} items: {cmd[-2:]}"
             )
 
+        if "n_parallel" in model_config:
+            cmd.extend(["--parallel", str(model_config["n_parallel"])])
+            logger.debug(
+                f"Command building: After n_parallel, {len(cmd)} items: {cmd[-2:]}"
+            )
+
+        # Jinja must come before --chat-template: llama-server treats the
+        # template as inline Jinja source whenever Jinja is on (the default in
+        # current builds), so built-in names like "gemma" need --no-jinja.
+        jinja = model_config.get("jinja")
+        if is_builtin_chat_template_name(model_config.get("chat_template")):
+            if self._supports("--no-jinja"):
+                cmd.append("--no-jinja")
+        elif jinja is True:
+            cmd.append("--jinja")
+        elif jinja is False and self._supports("--no-jinja"):
+            cmd.append("--no-jinja")
+
         if "chat_template" in model_config:
             cmd.extend(["--chat-template", model_config["chat_template"]])
             logger.debug(
@@ -718,10 +1115,6 @@ class RunnerProcess:
                 f"Command building: After no-kv-offload, {len(cmd)} items: {cmd[-1:]}"
             )
 
-        if model_config.get("jinja", False):
-            cmd.append("--jinja")
-            logger.debug(f"Command building: After jinja, {len(cmd)} items: {cmd[-1:]}")
-
         if "pooling" in model_config:
             cmd.extend(["--pooling", model_config["pooling"]])
             logger.debug(
@@ -734,10 +1127,11 @@ class RunnerProcess:
                 f"Command building: After flash_attn, {len(cmd)} items: {cmd[-2:]}"
             )
 
-        if model_config.get("use_mlock", False):
-            cmd.append("--mlock")
+        load_mode_args = self._load_mode_args(model_config)
+        if load_mode_args:
+            cmd.extend(load_mode_args)
             logger.debug(
-                f"Command building: After use_mlock, {len(cmd)} items: {cmd[-1:]}"
+                f"Command building: After load_mode, {len(cmd)} items: {load_mode_args}"
             )
 
         if "main_gpu" in model_config:
@@ -800,11 +1194,15 @@ class RunnerProcess:
                 f"Command building: After yarn-orig-ctx, {len(cmd)} items: {cmd[-2:]}"
             )
 
+        # User-supplied args (model "args" + runner "extra_args")
+        load_mode_set = "--load-mode" in load_mode_args
+        user_args: list[str] = []
+
         # Add model-specific arguments
         if "args" in model_config and model_config["args"].strip():
             try:
                 model_args = shlex.split(model_config["args"].strip())
-                cmd.extend(model_args)
+                user_args.extend(model_args)
                 logger.debug(
                     f"Command building: After model args, {len(cmd)} items: added {len(model_args)} args"
                 )
@@ -815,13 +1213,17 @@ class RunnerProcess:
                 )
                 # Fallback to simple split for malformed arguments
                 model_args = model_config["args"].strip().split()
-                cmd.extend(model_args)
+                user_args.extend(model_args)
                 logger.debug(
                     f"Command building: Using fallback split, {len(cmd)} items: added {len(model_args)} args"
                 )
 
         # Add extra arguments
-        cmd.extend(self.runner_config.get("extra_args", []))
+        user_args.extend(self.runner_config.get("extra_args", []))
+
+        cmd.extend(self._translate_legacy_load_flags(user_args, load_mode_set))
+
+        self._warn_unsupported_flags(cmd)
 
         return cmd, env_from_path
 
@@ -1049,7 +1451,17 @@ class RunnerManager:
                         and runner.current_model is not None
                         and not runner.is_starting
                         and runner.last_activity_ts is not None
+                        and (current_time - runner.last_activity_ts)
+                        >= runner.auto_unload_timeout_seconds
                     ):
+                        # Idle time only counts once the model has loaded;
+                        # a large model can take longer to load than the
+                        # timeout. refresh_model_loaded restarts the idle
+                        # clock when it sees the load has finished.
+                        if not await runner.refresh_model_loaded():
+                            runner.last_activity_ts = time.time()
+                            continue
+
                         # Use lock to prevent race with request start/end
                         async with runner._request_lock:
                             if (
@@ -1298,17 +1710,25 @@ class RunnerManager:
         Returns:
             Tuple of (success: bool, error_message: str or None)
         """
+        # Load failures recorded from now on belong to this request; older
+        # ones do not stop it from trying again.
+        started_at = time.time()
+
         if not self.config_manager.get_retry_on_model_loading():
             # Retry disabled, use single attempt to ensure model is ready
             if not await self.is_model_available(model_alias):
                 logger.info(f"Starting runner for model {model_alias}")
                 if not await self.start_runner_for_model(model_alias):
-                    return False, f"Failed to start model: {model_alias}"
+                    return False, self._load_failure(
+                        model_alias, started_at
+                    ) or f"Failed to start model: {model_alias}"
 
             # Wait a bit for model to be fully ready
             await self._wait_for_model_readiness(model_alias, max_wait_seconds=30)
             is_ready, error = await self._check_model_readiness(model_alias)
-            return is_ready, error
+            if is_ready:
+                return True, None
+            return False, self._load_failure(model_alias, started_at) or error
 
         # Retry enabled - do pre-flight readiness checks with exponential backoff
         max_retries = self.config_manager.get_max_retries()
@@ -1316,37 +1736,82 @@ class RunnerManager:
         max_delay = self.config_manager.get_max_delay_seconds()
 
         last_error = None
+        evicted = False
 
         # Initial check before starting retry loop
-        is_ready, last_error = await self._perform_readiness_check(model_alias)
+        is_ready, last_error = await self._perform_readiness_check(
+            model_alias, started_at
+        )
         if is_ready:
             return True, None
 
-        for attempt in range(max_retries):
+        attempt = 0
+        while True:
+            # llama-server exited while loading: retrying the same command
+            # fails the same way, unless it ran out of memory and stopping
+            # idle runners (usually sharing the GPU) frees enough.
+            load_error = self._load_failure(model_alias, started_at)
+            if load_error:
+                if (
+                    not evicted
+                    and is_out_of_memory_error(load_error)
+                    and await self._evict_idle_runners(model_alias)
+                ):
+                    evicted = True
+                    logger.info(
+                        f"Retrying {model_alias} after freeing memory held by idle runners"
+                    )
+                    started_at = time.time()
+                    is_ready, last_error = await self._perform_readiness_check(
+                        model_alias, started_at
+                    )
+                    if is_ready:
+                        return True, None
+                    continue
+                logger.error(f"Model {model_alias} failed to load: {load_error}")
+                return False, load_error
+
+            if attempt >= max_retries:
+                break
             delay = min(base_delay * (2**attempt), max_delay)
+            attempt += 1
             logger.info(
-                f"Retrying model readiness check for {model_alias} (attempt {attempt + 2}/{max_retries + 1}) after {delay}s delay"
+                f"Retrying model readiness check for {model_alias} (attempt {attempt + 1}/{max_retries + 1}) after {delay}s delay"
             )
             await asyncio.sleep(delay)
 
-            is_ready, last_error = await self._perform_readiness_check(model_alias)
+            is_ready, last_error = await self._perform_readiness_check(
+                model_alias, started_at
+            )
             if is_ready:
                 return True, None
 
         # All retries exhausted
+        last_error = self._load_failure(model_alias, started_at) or last_error
         logger.error(
             f"Model readiness check for {model_alias} failed after {max_retries + 1} attempts. Last error: {last_error}"
         )
         return False, last_error
 
-    async def _perform_readiness_check(self, model_alias):
-        """Helper to perform a single readiness check, including starting the model if needed."""
+    async def _perform_readiness_check(
+        self, model_alias: str, since: float = 0.0
+    ) -> tuple[bool, str | None]:
+        """Helper to perform a single readiness check, including starting the model if needed.
+
+        A model that failed to load after `since` is not restarted; its load
+        error is returned instead.
+        """
         try:
             # Ensure model is started
             if not await self.is_model_available(model_alias):
+                load_error = self._load_failure(model_alias, since)
+                if load_error:
+                    return False, load_error
                 logger.info(f"Starting runner for model {model_alias}")
                 if not await self.start_runner_for_model(model_alias):
-                    return False, f"Failed to start model: {model_alias}"
+                    return False, self._load_failure(
+                        model_alias, since
+                    ) or f"Failed to start model: {model_alias}"
 
             # Wait for the newly started model to become ready
             logger.debug(
@@ -1357,6 +1822,9 @@ class RunnerManager:
             # Do a pre-flight readiness check
             is_ready, readiness_error = await self._check_model_readiness(model_alias)
             if not is_ready:
+                load_error = self._load_failure(model_alias, since)
+                if load_error:
+                    return False, load_error
                 logger.info(f"Model {model_alias} not ready: {readiness_error}")
                 return False, f"Model not ready: {readiness_error}"
 
@@ -1393,6 +1861,7 @@ class RunnerManager:
                         health_url, timeout=aiohttp.ClientTimeout(total=5)
                     ) as response:
                         if response.status == 200:
+                            runner.mark_model_loaded()
                             return True, None
                         elif response.status == 503:
                             # Parse the error response for loading status
@@ -1438,6 +1907,7 @@ class RunnerManager:
             model_alias: The model alias to wait for.
             max_wait_seconds: Maximum time to wait in seconds.
         """
+        runner = self.get_runner_for_model(model_alias)
         start_time = asyncio.get_event_loop().time()
         while (asyncio.get_event_loop().time() - start_time) < max_wait_seconds:
             is_ready, _ = await self._check_model_readiness(model_alias)
@@ -1446,10 +1916,59 @@ class RunnerManager:
                     f"Model {model_alias} became ready after {asyncio.get_event_loop().time() - start_time:.1f}s"
                 )
                 return
+            # No point waiting for a process that has exited (e.g. it failed
+            # to load the model); is_running() records why.
+            if runner is not None and not await runner.is_running():
+                logger.debug(f"Runner for {model_alias} exited while loading")
+                return
             await asyncio.sleep(0.5)
         logger.warning(
             f"Model {model_alias} did not become ready within {max_wait_seconds}s"
         )
+
+    def _load_failure(self, model_alias: str, since: float = 0.0) -> str | None:
+        """Return why the latest start of model_alias failed, if it failed after `since`."""
+        runner = self.get_runner_for_model(model_alias)
+        if (
+            runner is None
+            or runner.load_error_alias != model_alias
+            or runner.load_error_ts is None
+            or runner.load_error_ts < since
+        ):
+            return None
+        return runner.load_error
+
+    async def _evict_idle_runners(self, model_alias: str) -> list[str]:
+        """Stop other runners whose model is loaded but idle, to free memory.
+
+        Used when model_alias failed to load for lack of memory. Runners that
+        share a GPU are the usual cause, and an idle one reloads on its next
+        request. Runners that are starting, still loading or serving requests
+        are left alone.
+
+        Returns:
+            Names of the runners that were stopped.
+        """
+        own_runner = self.model_runner_map.get(model_alias)
+        evicted = []
+        for runner_name, runner in self.runners.items():
+            if runner_name == own_runner or runner.is_starting:
+                continue
+            if not await runner.refresh_model_loaded():
+                continue
+            async with runner._request_lock:
+                if runner.active_requests > 0 or runner.current_model is None:
+                    continue
+                current_alias = runner.current_model.get(
+                    "model_alias", os.path.basename(runner.current_model["model"])
+                )
+                logger.warning(
+                    f"Stopping idle runner {runner_name} (model: {current_alias}) "
+                    f"to free memory for {model_alias}"
+                )
+                await runner.stop()
+                evicted.append(runner_name)
+        return evicted
 
     async def forward_request(self, model_alias, endpoint, request_data):
         """Forward a request to a model's runner (assumes model is already ready).

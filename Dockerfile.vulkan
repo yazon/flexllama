@@ -15,12 +15,21 @@ RUN apt-get update && apt-get install -y \
     libvulkan-dev \
     glslang-tools \
     glslc \
+    spirv-headers \
     && rm -rf /var/lib/apt/lists/*
 
 # Clone and build llama.cpp with Vulkan support
 WORKDIR /build
 
-RUN git clone https://github.com/ggerganov/llama.cpp.git && \
+# Pinned llama.cpp release (tag or branch). Upstream master regularly removes
+# CLI flags, so bump this deliberately: --build-arg LLAMA_CPP_REF=vX.Y.Z
+ARG LLAMA_CPP_REF=v1.0.0
+
+# LLAMA_USE_PREBUILT_UI=OFF: llama.cpp downloads its web UI by build number,
+# which a shallow clone reports as b1, so it gets the newest UI, which may not
+# match the pinned release and fails the build. FlexLLama does not use the UI.
+
+RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp.git && \
     cd llama.cpp && \
     cmake -B build \
         -DGGML_VULKAN=ON \
@@ -29,12 +38,13 @@ RUN git clone https://github.com/ggerganov/llama.cpp.git && \
         -DBUILD_SHARED_LIBS=ON \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/llama.cpp \
-        -DLLAMA_BUILD_SERVER=ON && \
+        -DLLAMA_BUILD_SERVER=ON \
+        -DLLAMA_USE_PREBUILT_UI=OFF && \
     cmake --build build --config Release -j$(nproc) && \
     cmake --install build && \
     mkdir -p /opt/llama.cpp/lib && \
     find build -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; && \
-    find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true
+    { find build/tools/mtmd -name "*.so*" -type f -exec cp -a {} /opt/llama.cpp/lib/ \; || true; }
 
 # Stage 2: Runtime environment with AMD/Intel Vulkan support
 FROM ubuntu:24.04
@@ -62,13 +72,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/python3 /usr/bin/python
 
-# Intel Vulkan support (IRIS driver)
-RUN apt-get update && apt-get install -y \
-    intel-media-va-driver-non-free \
-    intel-level-zero-loader \
-    level-zero-loader \
-    2>/dev/null || true && \
-    rm -rf /var/lib/apt/lists/*
+# mesa-vulkan-drivers above provides the Vulkan drivers for both AMD (RADV) and
+# Intel (ANV); no other Intel packages are needed for llama.cpp's Vulkan backend.
 
 # Set up library paths
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu
@@ -76,9 +81,6 @@ ENV PATH=/usr/local/bin:${PATH}
 
 # AMD RADV driver (via Mesa) - enable ACO compiler for better performance
 ENV RADV_PERFTEST=aco
-
-# Intel Arc GPU support
-ENV ONEAPI_DEVICE_SELECTOR=level_zero
 
 # Copy everything from the built location
 COPY --from=builder /opt/llama.cpp/ /usr/local/
@@ -127,8 +129,8 @@ COPY docker/config.qwen3.unified.json /app/config.json
 
 # Expose ports
 # 8090: FlexLLama API and dashboard
-# 8095-8100: Default ports for llama-server runners
-EXPOSE 8090 8095 8096 8097 8098 8099 8100
+# Runners (8095+) listen on 127.0.0.1 inside the container; only the API is exposed
+EXPOSE 8090
 
 # Environment variables
 ENV FLEXLLAMA_CONFIG=/app/config.json
